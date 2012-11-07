@@ -2,7 +2,7 @@ module Subscription.Params where
 
 import qualified Data.Text as T
 
-data Strategy = Sync | Async
+data Strategy = Sync | Async deriving Show
 
 data SubParam = Callback T.Text
                 | Mode T.Text
@@ -10,4 +10,4 @@ data SubParam = Callback T.Text
                 | LeaseSeconds Int
                 | Secret T.Text
                 | VerifyToken T.Text
-                | Verify Strategy
+                | Verify Strategy deriving Show
