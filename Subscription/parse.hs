@@ -60,7 +60,7 @@ printer = forever ((lift . print) =<< await)
 first :: (Monad m, r ~ ()) =>
          Pipe a b m r
          -> Pipe (a, c) (b, c) m r
-first inner = ((\(a, c) -> ((yield . (, c)) =<< await) <+< inner <+< yield a) =<< await)
+first inner = forever $ ((\(a, c) -> ((yield . (, c)) =<< await) <+< inner <+< yield a) =<< await)
 
 hub_prefix = B.pack [104,117,98,46]
 
@@ -78,5 +78,9 @@ hub_secret = B.pack [115,101,99,114,101,116]
 
 hub_verify_token = B.pack [118,101,114,105,102,121,95,116,111,107,101,110]
 
+samples = [(B.pack [104,117,98,46,109,111,100,101], B.empty)
+          ,(B.pack [104,117,98,46,116,111,112,105,99], B.empty)
+          ,(B.pack [104,117,98,46,99,97,108,108,98,97,99,107], B.empty)]
+          
 -- Param parser process.
-process = printer <+< parseParam <+< first hubPrefix <+< source [(B.pack [104,117,98,46,116,111,112,105,99], B.empty)] -- hub.topic
+process = printer <+< parseParam <+< first hubPrefix <+< source samples -- hub.topic
