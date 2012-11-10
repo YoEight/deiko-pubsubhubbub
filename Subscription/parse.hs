@@ -58,12 +58,13 @@ parseParam = pipe (uncurry select =<<)
 
 -- Discard param request that doesn't start by 'hub.'   
 filterParam :: Monad m =>
-               Pipe (Maybe (B.ByteString, B.ByteString)) (Maybe (B.ByteString, B.ByteString)) m r
-filterParam = pipe go
-  where go pair = do
-          (name, value) <- pair
-          stripped      <- stripPrefix hub_prefix name
-          return (stripped, value)
+               Pipe (Maybe (B.ByteString, B.ByteString)) (Maybe (B.ByteString, B.ByteString)) m ()
+filterParam = forever $ await >>= go
+  where
+    go (Just (name, value)) = case stripPrefix hub_prefix name of
+      Just stripped -> yield $ Just (stripped, value)
+      Nothing       -> return ()
+    go _ = yield Nothing
 
 buildRequest :: Monad m =>
                 Pipe (Maybe SubParam) SubReq m ()
