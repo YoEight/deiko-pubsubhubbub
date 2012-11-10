@@ -4,6 +4,8 @@ import qualified Data.Text as T
 
 data Strategy = Sync | Async deriving Show
 
+data SubReq = SubReq [SubParam] deriving Show
+
 data SubParam = Callback T.Text
                 | Mode T.Text
                 | Topic T.Text

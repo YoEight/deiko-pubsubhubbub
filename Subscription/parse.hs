@@ -13,6 +13,7 @@ import Control.Proxy
 import qualified Data.ByteString as B
 import Data.Foldable
 import Data.ListLike
+import Data.Maybe
 import qualified Data.Text as T
 
 source :: (Monad m, Foldable f) =>
@@ -20,39 +21,57 @@ source :: (Monad m, Foldable f) =>
           -> Pipe () a m ()
 source = traverse_ yield
 
-stripPrefix :: (Monad m, Eq a, ListLike f a) =>
-               f ->
-               Pipe f f m r
-stripPrefix prefix = forever $ go prefix =<< await
-  where
-    go prefix value
-      | null value  = return ()
-      | null prefix = yield value
-      | otherwise = let (px, vx) = (head prefix, head value)
-                    in if px == vx then go (tail prefix) (tail value) else return ()
+sourceMaybe :: (Monad m, Foldable f) =>
+               f a
+               -> Pipe () (Maybe a) m ()
+sourceMaybe fa = traverse_ (yield . Just) fa >> yield Nothing
 
-parseParam :: Monad m => Pipe (B.ByteString, B.ByteString) SubParam  m ()
-parseParam = forever $ await >>= uncurry select
+
+stripPrefix :: B.ByteString
+               -> B.ByteString
+               -> Maybe B.ByteString
+stripPrefix prefix value
+  | null value  = Nothing
+  | null prefix = Just value
+  | otherwise   = let matched = (head prefix) == (head value)
+                  in if matched then stripPrefix (tail prefix) (tail value)
+                     else Nothing
 
 -- Yields a SubParam according to param name. Also performs
 -- basic validation on param value
-select :: Monad m =>
-          B.ByteString
+select :: B.ByteString
           -> B.ByteString
-          -> Pipe a SubParam m () 
+          -> Maybe SubParam 
 select name value
-  | name == hub_callback      = yield $ Callback T.empty
-  | name == hub_mode          = yield $ Mode T.empty
-  | name == hub_topic         = yield $ Topic T.empty
-  | name == hub_lease_seconds = yield $ LeaseSeconds 0
-  | name == hub_secret        = yield $ Secret T.empty
-  | name == hub_verify_token  = yield $ VerifyToken T.empty
-  | name == hub_verify        = yield $ Verify Sync
-  | otherwise                 = return ()
+  | name == hub_callback      = Just $ Callback T.empty
+  | name == hub_mode          = Just $ Mode T.empty
+  | name == hub_topic         = Just $ Topic T.empty
+  | name == hub_lease_seconds = Just $ LeaseSeconds 0
+  | name == hub_secret        = Just $ Secret T.empty
+  | name == hub_verify_token  = Just $ VerifyToken T.empty
+  | name == hub_verify        = Just $ Verify Sync
+  | otherwise                 = Nothing
 
--- Discard param request that doesn't start by 'hub.'
-hubPrefix :: Monad m => Pipe B.ByteString B.ByteString m ()
-hubPrefix = stripPrefix hub_prefix
+parseParam :: Monad m =>
+              Pipe (Maybe (B.ByteString, B.ByteString)) (Maybe SubParam) m r
+parseParam = pipe (uncurry select =<<)
+
+-- Discard param request that doesn't start by 'hub.'   
+filterParam :: Monad m =>
+               Pipe (Maybe (B.ByteString, B.ByteString)) (Maybe (B.ByteString, B.ByteString)) m r
+filterParam = pipe go
+  where go pair = do
+          (name, value) <- pair
+          stripped      <- stripPrefix hub_prefix name
+          return (stripped, value)
+
+buildRequest :: Monad m =>
+                Pipe (Maybe SubParam) SubReq m ()
+buildRequest = go []
+  where
+    go xs = do
+      param <- await
+      maybe (yield $ SubReq xs) (go . (:xs)) param
 
 printer = forever ((lift . print) =<< await)
 
@@ -83,4 +102,4 @@ samples = [(B.pack [104,117,98,46,109,111,100,101], B.empty)
           ,(B.pack [104,117,98,46,99,97,108,108,98,97,99,107], B.empty)]
           
 -- Param parser process.
-process = printer <+< parseParam <+< first hubPrefix <+< source samples -- hub.topic
+process = printer <+< buildRequest <+< parseParam <+< filterParam <+< sourceMaybe samples -- hub.topic
