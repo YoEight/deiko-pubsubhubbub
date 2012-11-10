@@ -2,19 +2,33 @@
 
 module Subscription.Parse where
 
-import Prelude hiding (head, tail, null)
+import Prelude hiding (head, tail, null, id, (.))
 
 import Subscription.Params
 
+import Control.Category
+import Control.Arrow
+import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Class
 import Control.Proxy
 
+import Data.Bifunctor
 import qualified Data.ByteString as B
-import Data.Foldable
-import Data.ListLike
+import Data.ByteString.Char8 hiding (tail, head, null)
+import Data.Char
+import Data.Either
+import Data.Foldable hiding (all)
+import Data.ListLike hiding (all)
 import Data.Maybe
 import qualified Data.Text as T
+import Data.Text.Encoding
+
+import Text.Parsec.Error
+import Text.Parsec.ByteString
+import Text.ParserCombinators.Parsec.Combinator
+import Text.ParserCombinators.Parsec.Prim hiding ((<|>))
+import Text.ParserCombinators.Parsec.Char
 
 source :: (Monad m, Foldable f) =>
           f a
@@ -41,20 +55,25 @@ stripPrefix prefix value
 -- basic validation on param value
 select :: B.ByteString
           -> B.ByteString
-          -> Maybe SubParam 
+          -> Maybe ReqParam 
 select name value
-  | name == hub_callback      = Just $ Callback T.empty
-  | name == hub_mode          = Just $ Mode T.empty
-  | name == hub_topic         = Just $ Topic T.empty
-  | name == hub_lease_seconds = Just $ LeaseSeconds 0
-  | name == hub_secret        = Just $ Secret T.empty
-  | name == hub_verify_token  = Just $ VerifyToken T.empty
-  | name == hub_verify        = Just $ Verify Sync
+  | name == hub_callback      = either (const Nothing) (Just . Callback) (parseUrl value)
+  | name == hub_mode          = either (const Nothing) (Just . Mode) (parseReqType value)
+  | name == hub_topic         = either (const Nothing) (Just . Topic) (parseUrl value)
+  | name == hub_lease_seconds = either (const Nothing) (Just . LeaseSeconds) (parseInt value)
+  | name == hub_secret        = Just $ Secret $ decodeUtf8 value
+  | name == hub_verify_token  = Just $ VerifyToken $ decodeUtf8 value
+  | name == hub_verify        = either (const Nothing) (Just . Verify) (parseStrategy value)
   | otherwise                 = Nothing
 
 parseParam :: Monad m =>
-              Pipe (Maybe (B.ByteString, B.ByteString)) (Maybe SubParam) m r
-parseParam = pipe (uncurry select =<<)
+              Pipe (Maybe (B.ByteString, B.ByteString)) (Maybe ReqParam) m r
+parseParam = forever $ await >>= go
+  where
+    go (Just (name, value)) = case select name value of
+      Nothing -> return ()
+      r       -> yield r
+    go _                    = yield Nothing
 
 -- Discard param request that doesn't start by 'hub.'   
 filterParam :: Monad m =>
@@ -67,13 +86,34 @@ filterParam = forever $ await >>= go
     go _ = yield Nothing
 
 buildRequest :: Monad m =>
-                Pipe (Maybe SubParam) SubReq m ()
+                Pipe (Maybe ReqParam) (Either String Req) m ()
 buildRequest = go []
   where
     go xs = do
       param <- await
-      maybe (yield $ SubReq xs) (go . (:xs)) param
+      maybe (yield $ Right $ Req xs) (go . (:xs)) param
 
+parseUrl :: B.ByteString -> Either String B.ByteString
+parseUrl input = bimap show (const input) (parse parser "" input) 
+  where
+    parser = do
+      string "http"
+      string "s://" <|> string "://"
+      some (alphaNum <|> oneOf "-_?/&.") <?> "invalid character"
+      eof
+
+parseInt :: B.ByteString -> Either String Int
+parseInt input = bimap show id (parse parser "" input)
+  where  parser = read <$> some digit 
+
+parseReqType :: B.ByteString -> Either String ReqType
+parseReqType input = bimap show id (parse parser "" input)
+  where
+    parser = (string "subscribe" *> pure Subscribe) <|> (string "unsubscribe" *> pure Unsubscribe)
+
+parseStrategy :: B.ByteString -> Either String Strategy
+parseStrategy input = bimap show id (parse parser "" input)
+  where  parser = (string "sync" *> pure Sync) <|> (string "async" *> pure Async) 
 printer = forever ((lift . print) =<< await)
 
 -- Simulate Arrow.first 
@@ -98,9 +138,11 @@ hub_secret = B.pack [115,101,99,114,101,116]
 
 hub_verify_token = B.pack [118,101,114,105,102,121,95,116,111,107,101,110]
 
-samples = [(B.pack [104,117,98,46,109,111,100,101], B.empty)
-          ,(B.pack [104,117,98,46,116,111,112,105,99], B.empty)
-          ,(B.pack [104,117,98,46,99,97,108,108,98,97,99,107], B.empty)]
+samples :: [(B.ByteString, B.ByteString)]
+samples = [(pack "hub.topic", pack "http://hackage.haskell.org/packages/archive/text/0.11.2.3/doc/html/Data-Text-Encoding.html")
+          ,(pack "hub.callback", pack "https://github.com/Frege/frege")
+          ,(pack "hub.mode", pack "subscribe")]
           
 -- Param parser process.
 process = printer <+< buildRequest <+< parseParam <+< filterParam <+< sourceMaybe samples -- hub.topic
+
