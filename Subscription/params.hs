@@ -20,3 +20,7 @@ data ReqParam = Callback B.ByteString
                 | Secret T.Text
                 | VerifyToken T.Text
                 | Verify Strategy deriving Show
+
+isSyncMode :: Req -> Bool
+isSyncMode (Req _ _ _ (Verify Sync) _) = True
+isSyncMode _ = False
