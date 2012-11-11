@@ -87,11 +87,22 @@ filterParam = forever $ await >>= go
 
 buildRequest :: Monad m =>
                 Pipe (Maybe ReqParam) (Either String Req) m ()
-buildRequest = go []
+buildRequest = go Nothing Nothing Nothing Nothing []
   where
-    go xs = do
+    go c@(Just callback) m@(Just mode) t@(Just topic) v@(Just verify) optionals = do
       param <- await
-      maybe (yield $ Right $ Req xs) (go . (:xs)) param
+      maybe (yield $ Right $ Req callback mode topic verify optionals) (go c m t v . (:optionals)) param
+
+    go c m t v optionals = do
+      param <- await
+      case param of
+        Nothing -> (yield . Left) "invalid request"
+        Just p  -> case p of
+          r@(Callback _) -> go (Just r) m t v optionals
+          r@(Mode _)     -> go c (Just r) t v optionals
+          r@(Topic _)    -> go c m (Just r) v optionals
+          r@(Verify _)   -> go c m t (Just r) optionals
+          r              -> go c m t v (r:optionals)
 
 parseUrl :: B.ByteString -> Either String B.ByteString
 parseUrl input = bimap show (const input) (parse parser "" input) 
@@ -114,6 +125,7 @@ parseReqType input = bimap show id (parse parser "" input)
 parseStrategy :: B.ByteString -> Either String Strategy
 parseStrategy input = bimap show id (parse parser "" input)
   where  parser = (string "sync" *> pure Sync) <|> (string "async" *> pure Async) 
+
 printer = forever ((lift . print) =<< await)
 
 -- Simulate Arrow.first 

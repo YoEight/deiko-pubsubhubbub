@@ -7,7 +7,11 @@ data Strategy = Sync | Async deriving Show
 
 data ReqType = Subscribe | Unsubscribe deriving Show
 
-data Req = Req [ReqParam] deriving Show
+data Req = Req { reqCallback :: ReqParam
+               , reqMode :: ReqParam
+               , reqTopic :: ReqParam
+               , reqVerify :: ReqParam
+               , reqOptionals :: [ReqParam] } deriving Show
 
 data ReqParam = Callback B.ByteString
                 | Mode ReqType
