@@ -1,22 +1,18 @@
 {-# LANGUAGE NoMonomorphismRestriction, TupleSections, TypeFamilies #-}
 
-module Subscription.Parse where
+module Subscription.Parse (parseRequest) where
 
-import Prelude hiding (head, tail, null, id, (.))
+import Prelude hiding (head, tail, null)
 
 import Subscription.Params
 
-import Control.Category
-import Control.Arrow
 import Control.Applicative
 import Control.Monad
-import Control.Monad.Trans.Class
-import Control.Proxy
+import Control.Pipe
 
 import Data.Bifunctor
 import qualified Data.ByteString as B
 import Data.ByteString.Char8 hiding (tail, head, null)
-import Data.Char
 import Data.Either
 import Data.Foldable hiding (all)
 import Data.ListLike hiding (all)
@@ -24,22 +20,10 @@ import Data.Maybe
 import qualified Data.Text as T
 import Data.Text.Encoding
 
-import Text.Parsec.Error
 import Text.Parsec.ByteString
 import Text.ParserCombinators.Parsec.Combinator
 import Text.ParserCombinators.Parsec.Prim hiding ((<|>))
 import Text.ParserCombinators.Parsec.Char
-
-source :: (Monad m, Foldable f) =>
-          f a
-          -> Pipe () a m ()
-source = traverse_ yield
-
-sourceMaybe :: (Monad m, Foldable f) =>
-               f a
-               -> Pipe () (Maybe a) m ()
-sourceMaybe fa = traverse_ (yield . Just) fa >> yield Nothing
-
 
 stripPrefix :: B.ByteString
                -> B.ByteString
@@ -51,7 +35,7 @@ stripPrefix prefix value
                   in if matched then stripPrefix (tail prefix) (tail value)
                      else Nothing
 
--- Yields a SubParam according to param name. Also performs
+-- Yields a ReqParam according to param name. Also performs
 -- basic validation on param value
 select :: B.ByteString
           -> B.ByteString
@@ -115,7 +99,7 @@ parseUrl input = bimap show (const input) (parse parser "" input)
 
 parseInt :: B.ByteString -> Either String Int
 parseInt input = bimap show id (parse parser "" input)
-  where  parser = read <$> some digit 
+  where  parser = read <$> some digit <* eof 
 
 parseReqType :: B.ByteString -> Either String ReqType
 parseReqType input = bimap show id (parse parser "" input)
@@ -126,13 +110,9 @@ parseStrategy :: B.ByteString -> Either String Strategy
 parseStrategy input = bimap show id (parse parser "" input)
   where  parser = (string "sync" *> pure Sync) <|> (string "async" *> pure Async) 
 
-printer = forever ((lift . print) =<< await)
-
--- Simulate Arrow.first 
-first :: (Monad m, r ~ ()) =>
-         Pipe a b m r
-         -> Pipe (a, c) (b, c) m r
-first inner = forever $ ((\(a, c) -> ((yield . (, c)) =<< await) <+< inner <+< yield a) =<< await)
+parseRequest :: Monad m =>
+                Pipe (Maybe (ByteString, ByteString)) (Either String Req) m ()
+parseRequest = buildRequest <+< parseParam <+< filterParam
 
 hub_prefix = B.pack [104,117,98,46]
 
@@ -149,12 +129,3 @@ hub_lease_seconds = B.pack [108,101,97,115,101,95,115,101,99,111,110,100,115]
 hub_secret = B.pack [115,101,99,114,101,116]
 
 hub_verify_token = B.pack [118,101,114,105,102,121,95,116,111,107,101,110]
-
-samples :: [(B.ByteString, B.ByteString)]
-samples = [(pack "hub.topic", pack "http://hackage.haskell.org/packages/archive/text/0.11.2.3/doc/html/Data-Text-Encoding.html")
-          ,(pack "hub.callback", pack "https://github.com/Frege/frege")
-          ,(pack "hub.mode", pack "subscribe")]
-          
--- Param parser process.
-process = printer <+< buildRequest <+< parseParam <+< filterParam <+< sourceMaybe samples -- hub.topic
-
