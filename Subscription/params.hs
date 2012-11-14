@@ -24,3 +24,7 @@ data ReqParam = Callback B.ByteString
 isSyncMode :: Req -> Bool
 isSyncMode (Req _ _ _ (Verify Sync) _) = True
 isSyncMode _ = False
+
+isSubscription :: Req -> Bool
+isSubscription (Req _ (Mode Subscribe) _ _ _) = True
+isSubscription _ = False
