@@ -4,18 +4,17 @@ module Subscription.Verification (verification) where
 
 import Subscription.Params
 
-import Control.Applicative
 import Control.Monad
+import Control.Monad.Trans
 import Control.Monad.Trans.Class
 import Control.Monad.Error.Class
-import Control.Monad.Trans.Either
-import Control.Monad.Reader
 import Control.Monad.Reader.Class
+import Control.Monad.Trans.Either
 import Control.Pipe
 
 import Data.Bson
 import Data.Either
-import Data.Monoid
+import qualified Data.Text as T
 import Data.Text.Encoding
 
 import Database.MongoDB hiding (Pipe(..))
@@ -37,23 +36,31 @@ sync :: (MonadIO m, MonadReader Conf m, MonadError e m)
         => Req
         -> Pipe a Response m ()
 sync req = do
-  result <- (lift . runEitherT) $ (confirmation req) >> (saveSubscription req)
+  result <- (lift . runEitherT) $ (confirmation req) >> (saveSub req True)
   either (yield . const Failure) (yield . const Success) result 
   
-async :: (MonadIO m, MonadReader Conf m, MonadError e m) =>
-         Req
+async :: (MonadIO m, MonadReader Conf m, MonadError e m)
+         => Req
          -> Pipe a Response m ()
 async req = do
-  result <- lift $ (runEitherT . saveSubscription) req
+  result <- lift $ runEitherT $ saveSub req False
   either (yield . const Failure) (yield . const Success) result
 
 -- Database call. Will use MongoDB
-saveSubscription :: (MonadIO m, MonadReader Conf m, MonadError e m)
-                    => Req
-                    -> EitherT () m ()
-saveSubscription req = EitherT go
+saveSub :: (MonadIO m, MonadReader Conf m, MonadError e m)
+           => Req
+           -> Bool
+           -> EitherT () m ()
+saveSub req@(Req (Callback callback) _ (Topic topic) _ _) verified = EitherT go
   where
-    go = runDbAction (return . Left . const ()) (fmap Right (createSubscription req))
+    go = let cText = decodeUtf8 callback
+             tText = decodeUtf8 topic
+             doc   = createSubDoc req
+             action
+               | verified  = findSub cText tText >>= save "hub_subscription" . maybe doc (merge doc . include ["_id"])
+               | otherwise = createTempSub doc
+               
+         in runDbAction (return . Left . const ()) (fmap Right action)
 
 -- Do a GET request using action request callback
 confirmation :: MonadIO m
@@ -61,15 +68,26 @@ confirmation :: MonadIO m
                 -> EitherT () m ()
 confirmation = error "todo"
 
-createSubscription :: Req -> Action IO ()
-createSubscription (Req (Callback callback) _ (Topic topic) _ optionals) =
-  let start = ["callback" =: (decodeUtf8 callback)
-              ,"topic"    =: (decodeUtf8 topic)]
-      go (LeaseSeconds n) = merge ["lease_seconds" =: n]
-      go (Secret secret)  = merge ["secret" =: secret]
+createTempSub :: Document -> Action IO ()
+createTempSub = insert_ "hub_temp_subscription"
 
-      document = foldr go start optionals
-  in insert_ "hub_subscription" document
+createSubDoc :: Req -> Document
+createSubDoc (Req (Callback callback) _ (Topic topic) _ optionals) =
+  let start = ["callback"  =: (decodeUtf8 callback)
+              ,"topic"     =: (decodeUtf8 topic)]
+              
+      go (LeaseSeconds n) = merge ["lease_seconds" =: n]
+      go (Secret secret)  = merge ["secret"        =: secret]
+
+  in foldr go start optionals
+
+findSub :: T.Text
+           -> T.Text
+           -> Action IO (Maybe Document)
+findSub callback topic =
+  let query = ["callback" =: callback
+              ,"topic"    =: topic]
+  in findOne (select query "hub_subscription")
 
 runDbAction :: (MonadIO m, MonadError e m, MonadReader Conf m)
                => (e -> m a)
