@@ -51,17 +51,17 @@ select name value
   | otherwise                 = Nothing
 
 parseParam :: Monad m =>
-              Pipe (Maybe (B.ByteString, B.ByteString)) (Maybe ReqParam) m r
+              Pipe (Maybe (B.ByteString, Maybe B.ByteString)) (Maybe ReqParam) m r
 parseParam = forever $ await >>= go
   where
-    go (Just (name, value)) = case select name value of
+    go (Just (name, Just value)) = case select name value of
       Nothing -> return ()
       r       -> yield r
     go _                    = yield Nothing
 
 -- Discard param request that doesn't start by 'hub.'   
 filterParam :: Monad m =>
-               Pipe (Maybe (B.ByteString, B.ByteString)) (Maybe (B.ByteString, B.ByteString)) m ()
+               Pipe (Maybe (B.ByteString, Maybe B.ByteString)) (Maybe (B.ByteString, Maybe B.ByteString)) m ()
 filterParam = forever $ await >>= go
   where
     go (Just (name, value)) = case stripPrefix hub_prefix name of
@@ -111,7 +111,7 @@ parseStrategy input = bimap show id (parse parser "" input)
   where  parser = (string "sync" *> pure Sync) <|> (string "async" *> pure Async) 
 
 parseRequest :: Monad m =>
-                Pipe (Maybe (ByteString, ByteString)) (Either String Req) m ()
+                Pipe (Maybe (ByteString, Maybe ByteString)) (Either String Req) m ()
 parseRequest = buildRequest <+< parseParam <+< filterParam
 
 hub_prefix = B.pack [104,117,98,46]

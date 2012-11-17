@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings, ExtendedDefaultRules, FlexibleContexts #-}
 
-module Subscription.Verification (verification) where
+module Subscription.Verification (verification, Response(..)) where
 
 import Subscription.Params
 
@@ -27,7 +27,7 @@ import Network.Curl
 
 import Subscription.Conf
 
-data Response = Success | Failure | Pending
+data Response = Success | Failure | Pending deriving Show
 
 verification :: (MonadIO m, MonadReader Conf m, MonadError e m)
                 => Pipe (Either String Req) Response m ()
