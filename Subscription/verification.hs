@@ -30,8 +30,8 @@ import Subscription.Conf
 data Response = Success | Failure | Pending deriving Show
 
 verification :: (MonadIO m, MonadReader Conf m, MonadError e m)
-                => Pipe (Either String Req) Response m ()
-verification = await >>= go
+                => Pipe (Either String Req) Response m r
+verification = forever $ await >>= go
   where
     go (Left _)    = yield Failure
     go (Right req)
@@ -40,15 +40,15 @@ verification = await >>= go
 
 sync :: (MonadIO m, MonadReader Conf m, MonadError e m)
         => Req
-        -> Pipe a Response m ()
-sync req = do
+        -> Pipe a Response m r
+sync req = forever $ do
   result <- (lift . runEitherT) $ (confirmation req) >> (saveSub req True)
   either (yield . const Failure) (yield . const Success) result 
   
 async :: (MonadIO m, MonadReader Conf m, MonadError e m)
          => Req
-         -> Pipe a Response m ()
-async req = do
+         -> Pipe a Response m r
+async req = forever $ do
   result <- lift $ runEitherT $ saveSub req False
   either (yield . const Failure) (yield . const Success) result
 

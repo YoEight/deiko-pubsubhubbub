@@ -61,7 +61,7 @@ parseParam = forever $ await >>= go
 
 -- Discard param request that doesn't start by 'hub.'   
 filterParam :: Monad m =>
-               Pipe (Maybe (B.ByteString, Maybe B.ByteString)) (Maybe (B.ByteString, Maybe B.ByteString)) m ()
+               Pipe (Maybe (B.ByteString, Maybe B.ByteString)) (Maybe (B.ByteString, Maybe B.ByteString)) m r
 filterParam = forever $ await >>= go
   where
     go (Just (name, value)) = case stripPrefix hub_prefix name of
@@ -70,8 +70,8 @@ filterParam = forever $ await >>= go
     go _ = yield Nothing
 
 buildRequest :: Monad m =>
-                Pipe (Maybe ReqParam) (Either String Req) m ()
-buildRequest = go Nothing Nothing Nothing Nothing []
+                Pipe (Maybe ReqParam) (Either String Req) m r
+buildRequest = forever $ go Nothing Nothing Nothing Nothing []
   where
     go c@(Just callback) m@(Just mode) t@(Just topic) v@(Just verify) optionals = do
       param <- await
@@ -111,7 +111,7 @@ parseStrategy input = bimap show id (parse parser "" input)
   where  parser = (string "sync" *> pure Sync) <|> (string "async" *> pure Async) 
 
 parseRequest :: Monad m =>
-                Pipe (Maybe (ByteString, Maybe ByteString)) (Either String Req) m ()
+                Pipe (Maybe (ByteString, Maybe ByteString)) (Either String Req) m r
 parseRequest = buildRequest <+< parseParam <+< filterParam
 
 hub_prefix = B.pack [104,117,98,46]

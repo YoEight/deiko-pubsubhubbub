@@ -12,15 +12,16 @@ import Control.Pipe
 
 import qualified Data.ByteString as B 
 import qualified Data.ByteString.Lazy as L
-import Data.Conduit (Conduit(..))
+import Data.Conduit (Conduit(..), ResourceT(..))
 import Data.List
 import Data.Maybe
 
-import Database.MongoDB hiding (find)
+import Database.MongoDB hiding (Pipe(..), find)
 
 import Network.Wai
-import Network.Wai.Handler.Warp
+import Network.Wai.Handler.Warp hiding (HostPreference(..))
 import Network.HTTP.Types
+import Network.HTTP.Types.Header
 
 import qualified Data.ByteString.Lazy.Char8 as C
 
@@ -29,30 +30,24 @@ conf = Conf (DB (Host "127.0.0.1" defaultPort) "hub_deiko")
 
 main = run 8080 (go handler)
   where
-    go app req = do
-      r <- lift $ app (asRight $ parseMethod $ requestMethod req) req
-      case r of
-        Left _ -> return $ responseLBS
-                     status404
-                     []
-                     L.empty
-
-        Right r -> return $ responseLBS
-                      status200
-                      []
-                      $ C.pack (show r)
-
-handler :: StdMethod -> Request -> IO (Either () V.Response) -- doesn't compile and ugly
+    go app req = let action = runPipe $ app (asRight $ parseMethod $ requestMethod req) req
+                 in runReaderT action conf
+                      
+handler :: StdMethod
+           -> Request
+           -> Pipe () C (ReaderT Conf (ResourceT IO)) Response
 handler POST req
-  | isFormUrlEncoded req = let action = runPipe $ subscription (queryString req)
-                           in do
-                              response <- runReaderT action conf
-                              print response
-                              return $ Right response
-  | otherwise = return $ Left ()
-handler _ _ = return $ Left ()
+  | isFormUrlEncoded req = let go = do
+                                 resp <- await
+                                 case resp of                                                       
+                                   V.Success -> return (responseLBS status200 [] $ C.pack "success")
+                                   V.Pending -> return (responseLBS status200 [] $ C.pack "pending")
+                                   V.Failure -> return (responseLBS status404 [] $ C.pack "failure")
+                           in go <+< subscription (queryString req)
+  | otherwise = return (responseLBS status404 [] "failure")
+  
 
 isFormUrlEncoded :: Request -> Bool
-isFormUrlEncoded = maybe False (const True) . find (== ("Content-Type", C.pack "application/x-www-form-urlencoded")) . requestHeaders
+isFormUrlEncoded = maybe False (const True) . find (== (hContentType, "application/x-www-form-urlencoded")) . requestHeaders
 
 asRight (Right a) = a
