@@ -1,20 +1,27 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, NoMonomorphismRestriction, FlexibleContexts, ImpredicativeTypes #-}
 
 module Main where
 
 import Subscription
 import Subscription.Conf
+import Subscription.Params
+import Subscription.Util
 import qualified Subscription.Verification as V
 
 import Control.Monad.Trans.Class
+import Control.Monad.Reader.Class
+import Control.Monad.State.Class
+import Control.Monad.Error.Class
 import Control.Monad.Reader
-import Control.Pipe
+import Control.Monad.RWS.Lazy
 
 import qualified Data.ByteString as B 
 import qualified Data.ByteString.Lazy as L
 import Data.Conduit (Conduit(..), ResourceT(..))
 import Data.List
+import Data.Foldable hiding (find)
 import Data.Maybe
+import Data.Machine hiding (run)
 
 import Database.MongoDB hiding (Pipe(..), find)
 
@@ -28,24 +35,33 @@ import qualified Data.ByteString.Lazy.Char8 as C
 conf :: Conf 
 conf = Conf (DB (Host "127.0.0.1" defaultPort) "hub_deiko")
 
-main = run 8080 (go handler)
+application = server <~ webapp <~ pubSub
+
+main = runMachineT application
+
+server :: MonadIO m => ProcessT m Application a
+server = construct $ liftIO . run 8080 =<< await
+
+webapp :: Process (ProcessT (RWST Conf () Report (ResourceT IO)) Request ()) Application
+webapp = construct $ await >>= go
   where
-    go app req = let action = runPipe $ app (asRight $ parseMethod $ requestMethod req) req
-                 in runReaderT action conf
-                      
-handler :: StdMethod
-           -> Request
-           -> Pipe () C (ReaderT Conf (ResourceT IO)) Response
-handler POST req
-  | isFormUrlEncoded req = let go = do
-                                 resp <- await
-                                 case resp of                                                       
-                                   V.Success -> return (responseLBS status200 [] $ C.pack "success")
-                                   V.Pending -> return (responseLBS status200 [] $ C.pack "pending")
-                                   V.Failure -> return (responseLBS status404 [] $ C.pack "failure")
-                           in go <+< subscription (queryString req)
-  | otherwise = return (responseLBS status404 [] "failure")
-  
+    go app = yield $ builder app
+    builder app req = let action = runMachineT (app <~ (construct $ yield req))
+                          result = runRWST action conf (Report Nothing Sync)
+                      in do
+                        (_, report, _) <- result -- TODO: use report
+                        return (responseLBS status200 [] "todo")
+
+pubSub :: (MonadIO m, MonadState Report m, MonadReader Conf m, MonadError e m)
+          => Source (ProcessT m Request ())
+pubSub = construct $ yield (subscription <~ (construct $ await >>= go))
+  where
+    go req = let method  = asRight $ parseMethod $ requestMethod req
+                 params  = queryString req
+                 path    = pathInfo req
+             in case (method, path) of
+               (POST, ["subscribe"]) -> traverse_ yield params
+               _ -> reportError ClientSide "unhandled request"
 
 isFormUrlEncoded :: Request -> Bool
 isFormUrlEncoded = maybe False (const True) . find (== (hContentType, "application/x-www-form-urlencoded")) . requestHeaders

@@ -1,22 +1,21 @@
-{-# LANGUAGE NoMonomorphismRestriction, TupleSections, TypeFamilies #-}
+{-# LANGUAGE FlexibleContexts, OverloadedStrings #-}
 
 module Subscription.Parse (parseRequest) where
 
 import Prelude hiding (head, tail, null)
 
 import Subscription.Params
+import Subscription.Util
 
 import Control.Applicative
-import Control.Monad
-import Control.Pipe
+import Control.Monad.State.Class
 
 import Data.Bifunctor
 import qualified Data.ByteString as B
 import Data.ByteString.Char8 hiding (tail, head, null)
 import Data.Either
-import Data.Foldable hiding (all)
-import Data.ListLike hiding (all)
 import Data.Maybe
+import Data.Machine
 import qualified Data.Text as T
 import Data.Text.Encoding
 
@@ -24,16 +23,6 @@ import Text.Parsec.ByteString
 import Text.ParserCombinators.Parsec.Combinator
 import Text.ParserCombinators.Parsec.Prim hiding ((<|>))
 import Text.ParserCombinators.Parsec.Char
-
-stripPrefix :: B.ByteString
-               -> B.ByteString
-               -> Maybe B.ByteString
-stripPrefix prefix value
-  | null value  = Nothing
-  | null prefix = Just value
-  | otherwise   = let matched = (head prefix) == (head value)
-                  in if matched then stripPrefix (tail prefix) (tail value)
-                     else Nothing
 
 -- Yields a ReqParam according to param name. Also performs
 -- basic validation on param value
@@ -50,43 +39,30 @@ select name value
   | name == hub_verify        = either (const Nothing) (Just . Verify) (parseStrategy value)
   | otherwise                 = Nothing
 
-parseParam :: Monad m =>
-              Pipe (Maybe (B.ByteString, Maybe B.ByteString)) (Maybe ReqParam) m r
-parseParam = forever $ await >>= go
+parseParam :: Process (B.ByteString, Maybe B.ByteString) ReqParam
+parseParam = repeatedly go
   where
-    go (Just (name, Just value)) = case select name value of
-      Nothing -> return ()
-      r       -> yield r
-    go _                    = yield Nothing
+    go = do
+      (name, v) <- await
+      case v of
+        Just value -> maybe (return ()) yield (select name value)
+        Nothing    -> return ()
 
--- Discard param request that doesn't start by 'hub.'   
-filterParam :: Monad m =>
-               Pipe (Maybe (B.ByteString, Maybe B.ByteString)) (Maybe (B.ByteString, Maybe B.ByteString)) m r
-filterParam = forever $ await >>= go
+buildRequest :: MonadState Report m
+                => ProcessT m ReqParam Req
+buildRequest = construct $ go Nothing Nothing Nothing Nothing []
   where
-    go (Just (name, value)) = case stripPrefix hub_prefix name of
-      Just stripped -> yield $ Just (stripped, value)
-      Nothing       -> return ()
-    go _ = yield Nothing
-
-buildRequest :: Monad m =>
-                Pipe (Maybe ReqParam) (Either String Req) m r
-buildRequest = forever $ go Nothing Nothing Nothing Nothing []
-  where
-    go c@(Just callback) m@(Just mode) t@(Just topic) v@(Just verify) optionals = do
-      param <- await
-      maybe (yield $ Right $ Req callback mode topic verify optionals) (go c m t v . (:optionals)) param
-
-    go c m t v optionals = do
+    go c m t v opts = build c m t v opts <|> (reportError ClientSide "imcomplete request")
+    build c@(Just callback) m@(Just mode) t@(Just topic) v@(Just verify) opts =
+      (build c m t v . (:opts) =<< await) <|> yield (Req callback mode topic verify opts)
+    build c m t v opts = do
       param <- await
       case param of
-        Nothing -> (yield . Left) "invalid request"
-        Just p  -> case p of
-          r@(Callback _) -> go (Just r) m t v optionals
-          r@(Mode _)     -> go c (Just r) t v optionals
-          r@(Topic _)    -> go c m (Just r) v optionals
-          r@(Verify _)   -> go c m t (Just r) optionals
-          r              -> go c m t v (r:optionals)
+        r@(Callback _) -> go (Just r) m t v opts
+        r@(Mode _)     -> go c (Just r) t v opts
+        r@(Topic _)    -> go c m (Just r) v opts
+        r@(Verify _)   -> go c m t (Just r) opts
+        r              -> go c m t v (r:opts)
 
 parseUrl :: B.ByteString -> Either String B.ByteString
 parseUrl input = bimap show (const input) (parse parser "" input) 
@@ -110,22 +86,27 @@ parseStrategy :: B.ByteString -> Either String Strategy
 parseStrategy input = bimap show id (parse parser "" input)
   where  parser = (string "sync" *> pure Sync) <|> (string "async" *> pure Async) 
 
-parseRequest :: Monad m =>
-                Pipe (Maybe (ByteString, Maybe ByteString)) (Either String Req) m r
-parseRequest = buildRequest <+< parseParam <+< filterParam
+parseRequest :: MonadState Report m
+                => ProcessT m (B.ByteString, Maybe B.ByteString) Req
+parseRequest = buildRequest <~ parseParam
 
-hub_prefix = B.pack [104,117,98,46]
+hub_callback :: B.ByteString
+hub_callback = "hub.callback"
 
-hub_callback = B.pack [99,97,108,108,98,97,99,107]
+hub_mode :: B.ByteString
+hub_mode = "hub.mode"
 
-hub_mode = B.pack [109,111,100,101]
+hub_topic :: B.ByteString
+hub_topic = "hub.topic"
 
-hub_topic = B.pack [116,111,112,105,99]
+hub_verify :: B.ByteString
+hub_verify = "hub.verify"
 
-hub_verify = B.pack [118,101,114,105,102,121]
+hub_lease_seconds :: B.ByteString
+hub_lease_seconds = "hub.lease_seconds"
 
-hub_lease_seconds = B.pack [108,101,97,115,101,95,115,101,99,111,110,100,115]
+hub_secret :: B.ByteString
+hub_secret = "hub.secret"
 
-hub_secret = B.pack [115,101,99,114,101,116]
-
-hub_verify_token = B.pack [118,101,114,105,102,121,95,116,111,107,101,110]
+hub_verify_token :: B.ByteString
+hub_verify_token = "hub.verify_token"

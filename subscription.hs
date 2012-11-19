@@ -4,23 +4,19 @@ module Subscription where
 
 import Subscription.Conf
 import Subscription.Parse
+import Subscription.Params
 import Subscription.Verification
+import Subscription.Persistence
 
 import Data.ByteString
-import Data.Foldable
+import Data.Machine
 
 import Control.Monad
 import Control.Monad.Reader.Class
 import Control.Monad.Error.Class
+import Control.Monad.State.Class
 import Control.Monad.Trans
-import Control.Pipe
 
-sourceMaybe :: (Monad m, Foldable f)
-               => f a
-               -> Pipe () (Maybe a) m r
-sourceMaybe = forever . (>> yield Nothing) . traverse_ (yield . Just) 
-
-subscription :: (MonadIO m, MonadReader Conf m, MonadError e m)
-                => [(ByteString, Maybe ByteString)]
-                -> Pipe () Response m r
-subscription xs = verification <+< parseRequest <+< sourceMaybe xs
+subscription :: (MonadIO m, MonadState Report m, MonadReader Conf m, MonadError e m)
+                => ProcessT m (ByteString, Maybe ByteString) a
+subscription  = persist <~ verification <~ parseRequest
