@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleContexts, OverloadedStrings #-}
 
-module Subscription.Parse (parseRequest) where
+module Subscription.Parse where
 
 import Prelude hiding (head, tail, null)
 
@@ -50,20 +50,20 @@ parseParam = repeatedly go
 
 buildRequest :: MonadState Report m
                 => ProcessT m ReqParam Req
-buildRequest = construct $ go Nothing Nothing Nothing Nothing []
+buildRequest = repeatedly $ go Nothing Nothing Nothing Nothing []
   where
-    go c m t v opts = build c m t v opts <|> (reportError ClientSide "imcomplete request")
-    build c@(Just callback) m@(Just mode) t@(Just topic) v@(Just verify) opts =
-      (build c m t v . (:opts) =<< await) <|> yield (Req callback mode topic verify opts)
-    build c m t v opts = do
-      param <- await
+    go c@(Just cal) m@(Just mod) t@(Just top) v@(Just ver) opts = do
+      x <- await <|> yield (Req cal mod top ver opts) *> stop
+      go c m t v (x:opts)
+    go c m t v opts = do
+      param <- await <|> (reportError ClientSide "imcomplete request")
       case param of
         r@(Callback _) -> go (Just r) m t v opts
         r@(Mode _)     -> go c (Just r) t v opts
         r@(Topic _)    -> go c m (Just r) v opts
         r@(Verify _)   -> go c m t (Just r) opts
         r              -> go c m t v (r:opts)
-
+        
 parseUrl :: B.ByteString -> Either String B.ByteString
 parseUrl input = bimap show (const input) (parse parser "" input) 
   where

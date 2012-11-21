@@ -1,33 +1,33 @@
+{-# LANGUAGE OverloadedStrings, NoMonomorphismRestriction #-}
+
 module Subscription.Test where
 
 import Subscription.Parse
+import Subscription.Params
 
-import Control.Monad
-import Control.Monad.Trans.Class
-import Control.Pipe
+import Control.Monad.Trans
+import Control.Monad.RWS.Lazy
 
-import Data.Foldable
 import qualified Data.ByteString as B
-import Data.ByteString.Char8
+import Data.Machine
 
-sourceMaybe :: (Monad m, Foldable f) =>
-               f a
-               -> Pipe () (Maybe a) m ()
-sourceMaybe fa = traverse_ (yield . Just) fa >> yield Nothing
+printer :: (Show a, MonadIO m)
+           => ProcessT m a ()
+printer = repeatedly $ (liftIO . print) =<< await
 
-printer :: Show a =>
-           Pipe a C IO ()
-printer = forever $ (lift . print) =<< await
+samples :: [(B.ByteString, Maybe B.ByteString)]
+samples = [("hub.topic",  Just "http://hackage.haskell.org/packages/archive/text/0.11.2.3/doc/html/Data-Text-Encoding.html")
+          ,("hub.callback", Just "https://github.com/Frege/frege")
+          ,("hub.verify", Just "sync")
+          ,("hub.mode", Just "subscribe")
+          ,("hub.secret", Just "azerty")
+          ,("hub.verify_token", Just "echo")
+          ,("hub.lease_seconds", Just "42")]
 
-samples :: [(B.ByteString, B.ByteString)]
-samples = [(pack "hub.topic", pack "http://hackage.haskell.org/packages/archive/text/0.11.2.3/doc/html/Data-Text-Encoding.html")
-          ,(pack "hub.callback", pack "https://github.com/Frege/frege")
-          ,(pack "hub.verify", pack "sync")
-          ,(pack "hub.mode", pack "subscribe")
-          ,(pack "hub.secret", pack "azerty")
-          ,(pack "hub.verify_token", pack "echo")
-          ,(pack "hub.lease_seconds", pack "42")]
+test_parse :: MonadIO m => ProcessT (RWST () () Report m) () ()
+test_parse = printer <~ parseRequest <~ source samples
 
-test_parseRequest :: Pipe () C IO ()
-test_parseRequest = printer <+< parseRequest <+< sourceMaybe samples
-          
+test_parse_param :: MonadIO m => ProcessT (RWST () () Report m) () ()
+test_parse_param = printer <~ parseParam <~ source samples
+
+test_grouping = printer <~ buffered 5 <~ source [1..10]          

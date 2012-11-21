@@ -3,9 +3,9 @@ module Subscription.Params where
 import qualified Data.ByteString as B
 import qualified Data.Text as T
 
-data Guilt = ServerSide | ClientSide
+data Guilt = ServerSide | ClientSide deriving Show
 
-data Report = Report (Maybe (Guilt, String)) Strategy
+data Report = Report (Maybe (Guilt, String)) Strategy deriving Show
 
 data Strategy = Sync | Async deriving Show
 
