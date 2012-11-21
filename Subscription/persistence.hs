@@ -29,6 +29,7 @@ persist = construct $ await >>= go
                                case strategy of
                                  Sync  -> saveSub req
                                  Async -> runDbAction (const stop) (createTempSub doc)
+      | otherwise = reportError ServerSide "not implemented yet"
 
 createTempSub :: Document -> Action IO ()
 createTempSub = insert_ "hub_temp_subscription"
@@ -40,6 +41,7 @@ createSubDoc (Req (Callback callback) _ (Topic topic) _ optionals) =
               
       go (LeaseSeconds n) = merge ["lease_seconds" =: n]
       go (Secret secret)  = merge ["secret"        =: secret]
+      go (VerifyToken vt) = merge ["verify_token"  =: vt]
 
   in foldr go start optionals
 
@@ -71,9 +73,9 @@ saveSub :: (MonadIO m, MonadReader Conf m, MonadError e m)
            -> PlanT k o m ()
 saveSub req@(Req (Callback callback) _ (Topic topic) _ _) = go
   where
-    go = let cText = decodeUtf8 callback
-             tText = decodeUtf8 topic
-             doc   = createSubDoc req
+    go = let cText  = decodeUtf8 callback
+             tText  = decodeUtf8 topic
+             doc    = createSubDoc req
              action = findSub cText tText >>= save "hub_subscription" . maybe doc (merge doc . include ["_id"])
                
          in runDbAction (const stop) action
