@@ -2,7 +2,7 @@
 
 module Subscription.Persistence (persist) where
 
-import Subscription.Params
+import Hub.Params
 import Subscription.Conf
 import Subscription.Util
 
@@ -19,7 +19,7 @@ import Data.Bson
 import Database.MongoDB
 
 persist :: (MonadState Report m, MonadReader Conf m, MonadError e m, MonadIO m)
-           => ProcessT m Req a
+           => ProcessT m SubReq a
 persist = construct $ await >>= go
   where
     go req
@@ -34,8 +34,8 @@ persist = construct $ await >>= go
 createTempSub :: Document -> Action IO ()
 createTempSub = insert_ "hub_temp_subscription"
 
-createSubDoc :: Req -> Document
-createSubDoc (Req (Callback callback) _ (Topic topic) _ optionals) =
+createSubDoc :: SubReq -> Document
+createSubDoc (SubReq (Callback callback) _ (Topic topic) _ optionals) =
   let start = ["callback"  =: (decodeUtf8 callback)
               ,"topic"     =: (decodeUtf8 topic)]
               
@@ -69,9 +69,9 @@ runDbAction handle action = do
     
 -- Database call. Will use MongoDB
 saveSub :: (MonadIO m, MonadReader Conf m, MonadError e m)
-           => Req
+           => SubReq
            -> PlanT k o m ()
-saveSub req@(Req (Callback callback) _ (Topic topic) _ _) = go
+saveSub req@(SubReq (Callback callback) _ (Topic topic) _ _) = go
   where
     go = let cText  = decodeUtf8 callback
              tText  = decodeUtf8 topic

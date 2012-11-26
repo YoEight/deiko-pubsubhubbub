@@ -4,7 +4,7 @@ module Subscription.Parse where
 
 import Prelude hiding (head, tail, null)
 
-import Subscription.Params
+import Hub.Params
 import Subscription.Util
 
 import Control.Applicative
@@ -49,11 +49,11 @@ parseParam = repeatedly go
         Nothing    -> return ()
 
 buildRequest :: MonadState Report m
-                => ProcessT m ReqParam Req
+                => ProcessT m ReqParam SubReq
 buildRequest = repeatedly $ go Nothing Nothing Nothing Nothing []
   where
     go c@(Just cal) m@(Just mod) t@(Just top) v@(Just ver) opts = do
-      x <- await <|> yield (Req cal mod top ver opts) *> stop
+      x <- await <|> yield (SubReq cal mod top ver opts) *> stop
       go c m t v (x:opts)
     go c m t v opts = do
       param <- await <|> (reportError ClientSide "imcomplete request")
@@ -87,7 +87,7 @@ parseStrategy input = bimap show id (parse parser "" input)
   where  parser = (string "sync" *> pure Sync) <|> (string "async" *> pure Async) 
 
 parseRequest :: MonadState Report m
-                => ProcessT m (B.ByteString, Maybe B.ByteString) Req
+                => ProcessT m (B.ByteString, Maybe B.ByteString) SubReq
 parseRequest = buildRequest <~ parseParam
 
 hub_callback :: B.ByteString

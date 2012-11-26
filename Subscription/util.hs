@@ -2,7 +2,7 @@
 
 module Subscription.Util where
 
-import Subscription.Params
+import Hub.Params
 
 import Data.Machine
 import Control.Monad.State.Class

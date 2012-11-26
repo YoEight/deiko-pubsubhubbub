@@ -2,7 +2,7 @@
 
 module Subscription.Verification (verification) where
 
-import Subscription.Params
+import Hub.Params
 import Subscription.Conf
 import Subscription.Util
 
@@ -21,7 +21,7 @@ import Data.Text.Encoding
 import Network.Curl
 
 verification :: (MonadState Report m, MonadIO m)
-                => ProcessT m Req Req
+                => ProcessT m SubReq SubReq
 verification = construct $ await >>= go
   where
     go req
@@ -30,7 +30,7 @@ verification = construct $ await >>= go
 
 -- Do a GET request using action request callback
 sync :: (MonadState Report m, MonadIO m)
-        => Req
+        => SubReq
         -> PlanT k o m ()
 sync req = let result = withCurlDo $ do
                  (challenge, url) <- confirmationRequest req
@@ -43,8 +43,8 @@ sync req = let result = withCurlDo $ do
                status | 200 >= status && status < 300 && validateSubcriberResponse challenge (respBody response) -> return ()
                       | otherwise -> reportError ClientSide "error during confirmation"
 
-confirmationRequest :: Req -> IO (String, String)
-confirmationRequest (Req (Callback callback) (Mode mode) (Topic topic) _ optionals) =
+confirmationRequest :: SubReq -> IO (String, String)
+confirmationRequest (SubReq (Callback callback) (Mode mode) (Topic topic) _ optionals) =
   let modeStr Subscribe   = "&hub.mode=subscribe"
       modeStr Unsubscribe = "&hub.mode=unsubscribe"
       topicStr = "&hub.topic=" ++ (C.unpack topic)
