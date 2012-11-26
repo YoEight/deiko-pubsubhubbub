@@ -12,20 +12,21 @@ import Control.Monad.Trans.Class
 import Control.Monad.Reader.Class
 import Control.Monad.State.Class
 import Control.Monad.Error.Class
-import Control.Monad.Reader
-import Control.Monad.RWS.Lazy
+import Control.Monad.Reader hiding (mapM_)
+import Control.Monad.RWS.Lazy hiding (mapM_)
 
 import qualified Data.ByteString as B 
 import qualified Data.ByteString.Lazy as L
 import Data.Conduit (Conduit(..), ResourceT(..))
 import Data.List
-import Data.Foldable hiding (find)
+import Data.Foldable hiding (find, mapM_)
 import Data.Maybe
 import Data.Machine hiding (run)
 
 import Database.MongoDB hiding (Pipe(..), find)
 
 import Network.Wai
+import Network.Wai.Parse
 import Network.Wai.Handler.Warp hiding (HostPreference(..))
 import Network.HTTP.Types
 import Network.HTTP.Types.Header
@@ -45,16 +46,17 @@ server = construct $ liftIO . run 8080 =<< await
 pubSub :: Source Application
 pubSub = construct $ yield go
   where
-    go = \req -> let method = asRight $ parseMethod $ requestMethod req
-                     params = queryString req
-                     path   = pathInfo req
+    go = \req -> let method    = asRight $ parseMethod $ requestMethod req
+                     paramData = parseRequestBody lbsBackEnd req
+                     path      = pathInfo req
                  in case (method, path) of
                    (POST, ["subscribe"])
-                     | isFormUrlEncoded req -> let action = runMachineT (subscription <~ source params)
-                                                   result :: ResourceT IO (Step k o (MachineT (RWST Conf () Report (ResourceT IO)) k o), Report, ())
-                                                   result = runRWST action conf (Report Nothing Sync)
+                     | isFormUrlEncoded req -> let action params = runMachineT (subscription <~ source params)
+                                                   result :: [Param] -> ResourceT IO (Step k o (MachineT (RWST Conf () Report (ResourceT IO)) k o), Report, ())
+                                                   result params = runRWST (action params) conf (Report Nothing Sync)
                                                in do
-                                                 (_ , report, _) <- result
+                                                 (params, _)     <- paramData
+                                                 (_ , report, _) <- result params
                                                  return $ responseLBS status200 [] "todo"
                    _ -> return $ responseLBS status404 [] ""
 

@@ -18,5 +18,5 @@ import Control.Monad.State.Class
 import Control.Monad.Trans
 
 subscription :: (MonadIO m, MonadState Report m, MonadReader Conf m, MonadError e m)
-                => ProcessT m (ByteString, Maybe ByteString) a
+                => ProcessT m (ByteString, ByteString) a
 subscription  = persist <~ verification <~ parseRequest

@@ -39,14 +39,8 @@ select name value
   | name == hub_verify        = either (const Nothing) (Just . Verify) (parseStrategy value)
   | otherwise                 = Nothing
 
-parseParam :: Process (B.ByteString, Maybe B.ByteString) ReqParam
-parseParam = repeatedly go
-  where
-    go = do
-      (name, v) <- await
-      case v of
-        Just value -> maybe (return ()) yield (select name value)
-        Nothing    -> return ()
+parseParam :: Process (B.ByteString, B.ByteString) ReqParam
+parseParam = repeatedly $ maybe (return ()) yield . uncurry select =<< await
 
 buildRequest :: MonadState Report m
                 => ProcessT m ReqParam SubReq
@@ -70,7 +64,7 @@ parseUrl input = bimap show (const input) (parse parser "" input)
     parser = do
       string "http"
       string "s://" <|> string "://"
-      some (alphaNum <|> oneOf "-_?/&.") <?> "invalid character"
+      some (alphaNum <|> oneOf "-_?/&.:") <?> "invalid character"
       eof
 
 parseInt :: B.ByteString -> Either String Int
@@ -87,7 +81,7 @@ parseStrategy input = bimap show id (parse parser "" input)
   where  parser = (string "sync" *> pure Sync) <|> (string "async" *> pure Async) 
 
 parseRequest :: MonadState Report m
-                => ProcessT m (B.ByteString, Maybe B.ByteString) SubReq
+                => ProcessT m (B.ByteString, B.ByteString) SubReq
 parseRequest = buildRequest <~ parseParam
 
 hub_callback :: B.ByteString
