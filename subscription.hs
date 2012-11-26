@@ -4,7 +4,7 @@ module Subscription where
 
 import Subscription.Conf
 import Subscription.Parse
-import Subscription.Params
+import Hub.Params
 import Subscription.Verification
 import Subscription.Persistence
 

@@ -4,7 +4,7 @@ module Main where
 
 import Subscription
 import Subscription.Conf
-import Subscription.Params
+import Hub.Params
 import Subscription.Util
 import qualified Subscription.Verification as V
 

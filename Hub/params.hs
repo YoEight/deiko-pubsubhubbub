@@ -1,4 +1,4 @@
-module Subscription.Params where
+module Hub.Params where
 
 import qualified Data.ByteString as B
 import qualified Data.Text as T
@@ -11,11 +11,11 @@ data Strategy = Sync | Async deriving Show
 
 data ReqType = Subscribe | Unsubscribe deriving Show
 
-data Req = Req { reqCallback :: ReqParam
-               , reqMode :: ReqParam
-               , reqTopic :: ReqParam
-               , reqVerify :: ReqParam
-               , reqOptionals :: [ReqParam] } deriving Show
+data SubReq = SubReq { reqCallback :: ReqParam
+                     , reqMode :: ReqParam
+                     , reqTopic :: ReqParam
+                     , reqVerify :: ReqParam
+                     , reqOptionals :: [ReqParam] } deriving Show
 
 data ReqParam = Callback B.ByteString
                 | Mode ReqType
@@ -25,10 +25,10 @@ data ReqParam = Callback B.ByteString
                 | VerifyToken T.Text
                 | Verify Strategy deriving Show
 
-isSyncMode :: Req -> Bool
-isSyncMode (Req _ _ _ (Verify Sync) _) = True
+isSyncMode :: SubReq -> Bool
+isSyncMode (SubReq _ _ _ (Verify Sync) _) = True
 isSyncMode _ = False
 
-isSubscription :: Req -> Bool
-isSubscription (Req _ (Mode Subscribe) _ _ _) = True
+isSubscription :: SubReq -> Bool
+isSubscription (SubReq _ (Mode Subscribe) _ _ _) = True
 isSubscription _ = False
