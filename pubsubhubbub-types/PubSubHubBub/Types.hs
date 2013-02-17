@@ -1,6 +1,6 @@
 module PubSubHubBub.Types (ParamLit(..)
                           ,SubReq
-                          ,VerifSubReq
+                          ,Verif
                           ,ContentNotif
                           ,isBytes
                           ,isInt
@@ -11,16 +11,13 @@ module PubSubHubBub.Types (ParamLit(..)
                           ,subReqVerify
                           ,subReqLeaseSeconds
                           ,subReqVerifyToken
-                          ,verifSubReqMode
-                          ,verifSubReqTopic
-                          ,verifSubReqChallenge
-                          ,verifSubReqLeaseSeconds
-                          ,verifSubReqVerifyToken
+                          ,verifMode
+                          ,verifTopic
+                          ,verifChallenge
+                          ,verifLeaseSeconds
+                          ,verifVerifyToken
                           ,contentNotifMode
                           ,contentNotifUrl
-                          ,validateSubReq
-                          ,validateVerifSubReq
-                          ,validateContentNotif
                           ,validateSubReqParams
                           ,parseInt
                           ,validateUrl) where
@@ -47,7 +44,7 @@ data ParamLit = PInt Int
               | PList [ParamLit]
 
 newtype SubReq = SubReq { subParamMap :: M.Map String ParamLit }
-newtype VerifSubReq = VerifSubReq { verifParamMap :: M.Map String ParamLit }
+newtype Verif = VerifSubReq { verifParamMap :: M.Map String ParamLit }
 newtype ContentNotif = ContentNotif { contentParamMap :: M.Map String ParamLit }
 
 isBytes :: ParamLit -> Bool
@@ -83,57 +80,26 @@ subReqSecret = (M.lookup "secret") . subParamMap
 subReqVerifyToken :: SubReq -> Maybe ParamLit
 subReqVerifyToken = (M.lookup "verify_token") . subParamMap
 
-verifSubReqMode :: VerifSubReq -> ParamLit
-verifSubReqMode = (M.! "mode") . verifParamMap
+verifMode :: Verif -> ParamLit
+verifMode = (M.! "mode") . verifParamMap
 
-verifSubReqTopic :: VerifSubReq -> ParamLit
-verifSubReqTopic = (M.! "topic") . verifParamMap
+verifTopic :: Verif -> ParamLit
+verifTopic = (M.! "topic") . verifParamMap
 
-verifSubReqChallenge :: VerifSubReq -> ParamLit
-verifSubReqChallenge = (M.! "challenge") . verifParamMap
+verifChallenge :: Verif -> ParamLit
+verifChallenge = (M.! "challenge") . verifParamMap
 
-verifSubReqLeaseSeconds :: VerifSubReq -> Maybe ParamLit
-verifSubReqLeaseSeconds = (M.lookup "lease_seconds") . verifParamMap
+verifLeaseSeconds :: Verif -> Maybe ParamLit
+verifLeaseSeconds = (M.lookup "lease_seconds") . verifParamMap
 
-verifSubReqVerifyToken :: VerifSubReq -> Maybe ParamLit
-verifSubReqVerifyToken = (M.lookup "verify_token") . verifParamMap
+verifVerifyToken :: Verif -> Maybe ParamLit
+verifVerifyToken = (M.lookup "verify_token") . verifParamMap
 
 contentNotifMode :: ContentNotif -> ParamLit
 contentNotifMode = (M.! "mode") . contentParamMap
 
 contentNotifUrl :: ContentNotif -> ParamLit
 contentNotifUrl = (M.! "url") . contentParamMap
-
-validateSubReq :: M.Map String ParamLit -> ValidateNEL String SubReq
-validateSubReq m =
-  (\_ _ _ _ -> SubReq m)
-  <$> isPresent "callback"
-  <*> isPresent "mode"
-  <*> isPresent "topic"
-  <*> isPresent "verify"
-    where
-      isPresent param = validateParam (M.lookup param m) param
-
-validateVerifSubReq :: M.Map String ParamLit -> ValidateNEL String VerifSubReq
-validateVerifSubReq m =
-  (\_ _ _ -> VerifSubReq m)
-  <$> isPresent "mode"
-  <*> isPresent "topic"
-  <*> isPresent "challenge"
-    where
-      isPresent param = validateParam (M.lookup param m) param
-
-validateContentNotif :: M.Map String ParamLit -> ValidateNEL String ContentNotif
-validateContentNotif m =
-  (\_ _-> ContentNotif m)
-  <$> isPresent "mode"
-  <*> isPresent "topic"
-    where
-      isPresent param = validateParam (M.lookup param m) param
-
-validateParam :: Maybe ParamLit -> String -> ValidateNEL String ParamLit
-validateParam Nothing msg  = failure (("Parameter is missing:" ++ msg) :| [])
-validateParam (Just lit) _ = success lit
 
 validateSubReqParams :: ReaderT (M.Map String ParamLit) (Either String) SubReq
 validateSubReqParams = do

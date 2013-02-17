@@ -10,11 +10,11 @@ import           Control.Monad.State
 import           Control.Monad.Trans
 
 import           Data.Bifunctor
-import qualified Data.ByteString                          as B
+import qualified Data.ByteString      as B
 import           Data.Either
 import           Data.Foldable
 import           Data.Machine
-import qualified Data.Map                                 as M
+import qualified Data.Map             as M
 
 import           PubSubHubBub.Types
 
@@ -31,24 +31,40 @@ parseParams = (repeatedly $ go []) <~ parseLiteral
       x <- await <|> yield (reverse xs) *> empty
       go (x:xs)
 
-parseSubReq :: Process [(B.ByteString, ParamLit)] (Either String SubReq)
-parseSubReq = repeatedly (await >>= go)
+makeMapParam :: (B.ByteString -> ParamLit -> ParamLit -> ParamLit)
+             -> Process [(B.ByteString, ParamLit)] (M.Map String ParamLit)
+makeMapParam k = repeatedly (await >>= go)
   where
     go [] = empty
     go xs =
-      let params     = execState (traverse_ makeMap xs) M.empty
-          validation = runReaderT validateSubReqParams params
-      in yield validation *> empty
+      let map = execState (traverse_ makeMap xs) M.empty
+      in yield map *> empty
     makeMap (key, lit) = modify (step key lit)
-    step key lit map
-      | key == hub_callback      = M.insertWith const "hub_callback" lit map
-      | key == hub_mode          = M.insertWith const "hub_mode" lit map
-      | key == hub_verify        = M.insertWith merge "hub_verify" lit map
-      | key == hub_lease_seconds = M.insertWith const "hub_lease_seconds" lit map
-      | key == hub_secret        = M.insertWith const "hub_secret" lit map
-      | key == hub_verify_token  = M.insertWith const "hub_verify_token" lit map
-    merge n (PList xs) = PList (xs ++ [n])
-    merge n o          = PList [o, n]
+    step key lit map = M.insertWith (k key) (show key) lit map
+
+makeSubReq :: Process (M.Map String ParamLit) (Either String SubReq)
+makeSubReq = repeatedly $ await >>= go
+  where
+    go map =
+      let validation = runReaderT validateSubReqParams map
+      in yield validation *> empty
+
+subReqSelector :: B.ByteString
+               -> ParamLit
+               -> ParamLit
+               -> ParamLit
+subReqSelector key new old
+  | key == hub_verify = merge new old
+  | otherwise         = new
+
+merge :: ParamLit -> ParamLit -> ParamLit
+merge n (PList xs) = PList (xs ++ [n])
+merge n o          = PList [o, n]
+
+subReqMap :: Process [(B.ByteString, ParamLit)] (M.Map String ParamLit)
+subReqMap = makeMapParam subReqSelector
+
+-- parseVerif :: Process [(B.ByteString, ParamLit)] (Either String Verif)
 
 hub_callback :: B.ByteString
 hub_callback = "hub.callback"
