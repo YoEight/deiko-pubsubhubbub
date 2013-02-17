@@ -1,11 +1,10 @@
-module PubSubHubBub.Types (ParamLit
+module PubSubHubBub.Types (ParamLit(..)
                           ,SubReq
                           ,VerifSubReq
                           ,ContentNotif
-                          ,litInt
-                          ,litBytes
-                          ,litText
-                          ,litList
+                          ,isBytes
+                          ,isInt
+                          ,isList
                           ,subReqCallback
                           ,subReqMode
                           ,subReqTopic
@@ -21,93 +20,89 @@ module PubSubHubBub.Types (ParamLit
                           ,contentNotifUrl
                           ,validateSubReq
                           ,validateVerifSubReq
-                          ,validateContentNotif) where
+                          ,validateContentNotif
+                          ,validateSubReqParams
+                          ,parseInt
+                          ,validateUrl) where
 
 import           Control.Applicative
-import qualified Data.ByteString       as B
+import           Control.Monad.Reader
+
+import           Data.Bifunctor
+import qualified Data.ByteString                          as B
 import           Data.List.NonEmpty
-import qualified Data.Map              as M
+import qualified Data.Map                                 as M
 import           Data.Maybe
 import           Data.Semigroup
-import qualified Data.Text             as T
+
 import           PubSubHubBub.Validate
 
+import           Text.Parsec.ByteString
+import           Text.ParserCombinators.Parsec.Char
+import           Text.ParserCombinators.Parsec.Combinator
+import           Text.ParserCombinators.Parsec.Prim       hiding ((<|>))
+
 data ParamLit = PInt Int
-              | PBytes B.ByteString 
-              | PText T.Text
+              | PBytes B.ByteString
               | PList [ParamLit]
 
 newtype SubReq = SubReq { subParamMap :: M.Map String ParamLit }
 newtype VerifSubReq = VerifSubReq { verifParamMap :: M.Map String ParamLit }
 newtype ContentNotif = ContentNotif { contentParamMap :: M.Map String ParamLit }
 
-litInt :: Int -> ParamLit
-litInt = PInt
+isBytes :: ParamLit -> Bool
+isBytes (PBytes _) = True
+isBytes _          = False
 
-litBytes :: B.ByteString -> ParamLit
-litBytes = PBytes
+isInt :: ParamLit -> Bool
+isInt (PInt _) = True
+isInt _        = False
 
-litText :: T.Text -> ParamLit
-litText = PText
+isList :: ParamLit -> Bool
+isList (PList _) = True
+isList _         = False
 
-litList :: [ParamLit] -> ParamLit
-litList = PList
+subReqCallback :: SubReq -> ParamLit
+subReqCallback = (M.! "callback") . subParamMap
 
-getInt :: ParamLit -> Int
-getInt (PInt i) = i
+subReqMode :: SubReq -> ParamLit
+subReqMode = (M.! "mode") . subParamMap
 
-getText :: ParamLit -> T.Text
-getText (PText t) = t
+subReqTopic :: SubReq -> ParamLit
+subReqTopic = (M.! "topic") . subParamMap
 
-getBytes :: ParamLit -> B.ByteString
-getBytes (PBytes b) = b
+subReqVerify :: SubReq -> ParamLit
+subReqVerify = (M.! "verify") . subParamMap
 
-getList :: ParamLit -> [ParamLit]
-getList (PList xs) = xs
+subReqLeaseSeconds :: SubReq -> Maybe ParamLit
+subReqLeaseSeconds = (M.lookup "lease_seconds") . subParamMap
 
-subReqCallback :: SubReq -> B.ByteString
-subReqCallback = getBytes . (M.! "callback") . subParamMap
+subReqSecret :: SubReq -> Maybe ParamLit
+subReqSecret = (M.lookup "secret") . subParamMap
 
-subReqMode :: SubReq -> B.ByteString
-subReqMode = getBytes . (M.! "mode") . subParamMap
+subReqVerifyToken :: SubReq -> Maybe ParamLit
+subReqVerifyToken = (M.lookup "verify_token") . subParamMap
 
-subReqTopic :: SubReq -> B.ByteString
-subReqTopic = getBytes . (M.! "topic") . subParamMap
+verifSubReqMode :: VerifSubReq -> ParamLit
+verifSubReqMode = (M.! "mode") . verifParamMap
 
-subReqVerify :: SubReq -> NonEmpty B.ByteString
-subReqVerify = go . fmap getBytes . getList . (M.! "verify") . subParamMap
-  where
-    go (x:xs) = x :| xs
+verifSubReqTopic :: VerifSubReq -> ParamLit
+verifSubReqTopic = (M.! "topic") . verifParamMap
 
-subReqLeaseSeconds :: SubReq -> Maybe Int
-subReqLeaseSeconds = fmap getInt . (M.lookup "lease_seconds") . subParamMap
+verifSubReqChallenge :: VerifSubReq -> ParamLit
+verifSubReqChallenge = (M.! "challenge") . verifParamMap
 
-subReqSecret :: SubReq -> Maybe T.Text
-subReqSecret = fmap getText . (M.lookup "secret") . subParamMap
+verifSubReqLeaseSeconds :: VerifSubReq -> Maybe ParamLit
+verifSubReqLeaseSeconds = (M.lookup "lease_seconds") . verifParamMap
 
-subReqVerifyToken :: SubReq -> Maybe T.Text
-subReqVerifyToken = fmap getText . (M.lookup "verify_token") . subParamMap
+verifSubReqVerifyToken :: VerifSubReq -> Maybe ParamLit
+verifSubReqVerifyToken = (M.lookup "verify_token") . verifParamMap
 
-verifSubReqMode :: VerifSubReq -> B.ByteString
-verifSubReqMode = getBytes . (M.! "mode") . verifParamMap
+contentNotifMode :: ContentNotif -> ParamLit
+contentNotifMode = (M.! "mode") . contentParamMap
 
-verifSubReqTopic :: VerifSubReq -> B.ByteString
-verifSubReqTopic = getBytes . (M.! "topic") . verifParamMap
-
-verifSubReqChallenge :: VerifSubReq -> B.ByteString
-verifSubReqChallenge = getBytes . (M.! "challenge") . verifParamMap
-
-verifSubReqLeaseSeconds :: VerifSubReq -> Maybe Int
-verifSubReqLeaseSeconds = fmap getInt . (M.lookup "lease_seconds") . verifParamMap
-
-verifSubReqVerifyToken :: VerifSubReq -> Maybe T.Text
-verifSubReqVerifyToken = fmap getText . (M.lookup "verify_token") . verifParamMap
-
-contentNotifMode :: ContentNotif -> B.ByteString
-contentNotifMode = getBytes . (M.! "mode") . contentParamMap
-
-contentNotifUrl :: ContentNotif -> B.ByteString
-contentNotifUrl = getBytes . (M.! "url") . contentParamMap
+contentNotifUrl :: ContentNotif -> ParamLit
+contentNotifUrl = (M.! "url") . contentParamMap
 
 validateSubReq :: M.Map String ParamLit -> ValidateNEL String SubReq
 validateSubReq m =
@@ -139,3 +134,69 @@ validateContentNotif m =
 validateParam :: Maybe ParamLit -> String -> ValidateNEL String ParamLit
 validateParam Nothing msg  = failure (("Parameter is missing:" ++ msg) :| [])
 validateParam (Just lit) _ = success lit
+
+validateSubReqParams :: ReaderT (M.Map String ParamLit) (Either String) SubReq
+validateSubReqParams = do
+  validateCallback
+  validateMode
+  validateVerify
+  validateLeaseSeconds
+  validateSecret
+  validateVerifyToken
+  asks SubReq
+
+validateCallback :: ReaderT (M.Map String ParamLit) (Either String) ()
+validateCallback = validatePresence "callback" >>= go
+  where
+    go (PBytes bytes) = lift $ validateUrl bytes
+    go _              = lift $ Left "callback param: invalid format"
+
+validateMode :: ReaderT (M.Map String ParamLit) (Either String) ParamLit
+validateMode = lift . validateFormat isBytes "mode" =<< validatePresence "mode"
+
+validateVerify :: ReaderT (M.Map String ParamLit) (Either String) ParamLit
+validateVerify = lift . validateFormat (\p -> isBytes p || isList p) "verify" =<< validatePresence "verify"
+
+validateLeaseSeconds :: ReaderT (M.Map String ParamLit) (Either String) ()
+validateLeaseSeconds = validateOptional (validateFormat isInt "lease_seconds") "lease_seconds"
+
+validateSecret :: ReaderT (M.Map String ParamLit) (Either String) ()
+validateSecret = validateOptional (validateFormat isBytes "secret") "secret"
+
+validateVerifyToken :: ReaderT (M.Map String ParamLit) (Either String) ()
+validateVerifyToken = validateOptional (validateFormat isBytes "verify_token") "verify_token"
+
+validateOptional :: (ParamLit -> Either String a)
+                 -> String
+                 -> ReaderT (M.Map String ParamLit) (Either String) ()
+validateOptional k key = do
+  param <- asks (M.lookup key)
+  maybe (return ()) (lift . fmap (const ()) . k) param
+
+validateFormat :: (ParamLit -> Bool)
+               -> String
+               -> ParamLit
+               -> Either String ParamLit
+validateFormat p key param
+  | p param   = return param
+  | otherwise = Left $ key ++ ": invalid format"
+
+validatePresence :: String -> ReaderT (M.Map String ParamLit) (Either String) ParamLit
+validatePresence key = do
+  p <- asks (M.lookup key)
+  case p of
+    Just param -> return param
+    Nothing    -> lift $ Left $ key ++ " param is mandatory"
+
+validateUrl :: B.ByteString -> Either String ()
+validateUrl input = bimap show (const ()) (parse parser "" input *> pure ())
+  where
+    parser = do
+      string "http"
+      string "s://" <|> string "://"
+      some (alphaNum <|> oneOf "-_?/&.:") <?> "invalid character in url"
+      eof
+
+parseInt :: B.ByteString -> Either String Int
+parseInt input = bimap show id (parse parser "" input)
+  where  parser = read <$> some digit <* eof
