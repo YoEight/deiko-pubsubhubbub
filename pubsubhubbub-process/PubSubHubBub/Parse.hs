@@ -1,5 +1,4 @@
 {-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections     #-}
 
 module PubSubHubBub.Parse where
@@ -32,7 +31,7 @@ parseParams = (repeatedly $ go []) <~ parseLiteral
       go (x:xs)
 
 makeMapParam :: (B.ByteString -> ParamLit -> ParamLit -> ParamLit)
-             -> Process [(B.ByteString, ParamLit)] (M.Map String ParamLit)
+             -> Process [(B.ByteString, ParamLit)] (M.Map B.ByteString ParamLit)
 makeMapParam k = repeatedly (await >>= go)
   where
     go [] = empty
@@ -40,9 +39,9 @@ makeMapParam k = repeatedly (await >>= go)
       let map = execState (traverse_ makeMap xs) M.empty
       in yield map *> empty
     makeMap (key, lit) = modify (step key lit)
-    step key lit map = M.insertWith (k key) (show key) lit map
+    step key lit map = M.insertWith (k key) key lit map
 
-makeSubReq :: Process (M.Map String ParamLit) (Either String SubReq)
+makeSubReq :: Process (M.Map B.ByteString ParamLit) (Either String SubReq)
 makeSubReq = repeatedly $ await >>= go
   where
     go map =
@@ -61,34 +60,5 @@ merge :: ParamLit -> ParamLit -> ParamLit
 merge n (PList xs) = PList (xs ++ [n])
 merge n o          = PList [o, n]
 
-subReqMap :: Process [(B.ByteString, ParamLit)] (M.Map String ParamLit)
+subReqMap :: Process [(B.ByteString, ParamLit)] (M.Map B.ByteString ParamLit)
 subReqMap = makeMapParam subReqSelector
-
--- parseVerif :: Process [(B.ByteString, ParamLit)] (Either String Verif)
-
-hub_callback :: B.ByteString
-hub_callback = "hub.callback"
-
-hub_mode :: B.ByteString
-hub_mode = "hub.mode"
-
-hub_topic :: B.ByteString
-hub_topic = "hub.topic"
-
-hub_verify :: B.ByteString
-hub_verify = "hub.verify"
-
-hub_lease_seconds :: B.ByteString
-hub_lease_seconds = "hub.lease_seconds"
-
-hub_secret :: B.ByteString
-hub_secret = "hub.secret"
-
-hub_verify_token :: B.ByteString
-hub_verify_token = "hub.verify_token"
-
-hub_url :: B.ByteString
-hub_url = "hub.url"
-
-hub_challenge :: B.ByteString
-hub_challenge = "hub.challenge"

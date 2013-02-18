@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module PubSubHubBub.Types (ParamLit(..)
                           ,SubReq
                           ,Verif
@@ -20,7 +21,15 @@ module PubSubHubBub.Types (ParamLit(..)
                           ,contentNotifUrl
                           ,validateSubReqParams
                           ,parseInt
-                          ,validateUrl) where
+                          ,validateUrl
+                          ,hub_callback
+                          ,hub_mode
+                          ,hub_verify
+                          ,hub_lease_seconds
+                          ,hub_secret
+                          ,hub_verify_token
+                          ,hub_url
+                          ,hub_challenge) where
 
 import           Control.Applicative
 import           Control.Monad.Reader
@@ -43,9 +52,9 @@ data ParamLit = PInt Int
               | PBytes B.ByteString
               | PList [ParamLit]
 
-newtype SubReq = SubReq { subParamMap :: M.Map String ParamLit }
-newtype Verif = VerifSubReq { verifParamMap :: M.Map String ParamLit }
-newtype ContentNotif = ContentNotif { contentParamMap :: M.Map String ParamLit }
+newtype SubReq = SubReq { subParamMap :: M.Map B.ByteString ParamLit }
+newtype Verif = VerifSubReq { verifParamMap :: M.Map B.ByteString ParamLit }
+newtype ContentNotif = ContentNotif { contentParamMap :: M.Map B.ByteString ParamLit }
 
 isBytes :: ParamLit -> Bool
 isBytes (PBytes _) = True
@@ -60,48 +69,48 @@ isList (PList _) = True
 isList _         = False
 
 subReqCallback :: SubReq -> ParamLit
-subReqCallback = (M.! "callback") . subParamMap
+subReqCallback = (M.! hub_callback) . subParamMap
 
 subReqMode :: SubReq -> ParamLit
-subReqMode = (M.! "mode") . subParamMap
+subReqMode = (M.! hub_mode) . subParamMap
 
 subReqTopic :: SubReq -> ParamLit
-subReqTopic = (M.! "topic") . subParamMap
+subReqTopic = (M.! hub_topic) . subParamMap
 
 subReqVerify :: SubReq -> ParamLit
-subReqVerify = (M.! "verify") . subParamMap
+subReqVerify = (M.! hub_verify) . subParamMap
 
 subReqLeaseSeconds :: SubReq -> Maybe ParamLit
-subReqLeaseSeconds = (M.lookup "lease_seconds") . subParamMap
+subReqLeaseSeconds = (M.lookup hub_lease_seconds) . subParamMap
 
 subReqSecret :: SubReq -> Maybe ParamLit
-subReqSecret = (M.lookup "secret") . subParamMap
+subReqSecret = (M.lookup hub_secret) . subParamMap
 
 subReqVerifyToken :: SubReq -> Maybe ParamLit
-subReqVerifyToken = (M.lookup "verify_token") . subParamMap
+subReqVerifyToken = (M.lookup hub_verify_token) . subParamMap
 
 verifMode :: Verif -> ParamLit
-verifMode = (M.! "mode") . verifParamMap
+verifMode = (M.! hub_mode) . verifParamMap
 
 verifTopic :: Verif -> ParamLit
-verifTopic = (M.! "topic") . verifParamMap
+verifTopic = (M.! hub_topic) . verifParamMap
 
 verifChallenge :: Verif -> ParamLit
-verifChallenge = (M.! "challenge") . verifParamMap
+verifChallenge = (M.! hub_challenge) . verifParamMap
 
 verifLeaseSeconds :: Verif -> Maybe ParamLit
-verifLeaseSeconds = (M.lookup "lease_seconds") . verifParamMap
+verifLeaseSeconds = (M.lookup hub_lease_seconds) . verifParamMap
 
 verifVerifyToken :: Verif -> Maybe ParamLit
-verifVerifyToken = (M.lookup "verify_token") . verifParamMap
+verifVerifyToken = (M.lookup hub_verify_token) . verifParamMap
 
 contentNotifMode :: ContentNotif -> ParamLit
-contentNotifMode = (M.! "mode") . contentParamMap
+contentNotifMode = (M.! hub_mode) . contentParamMap
 
 contentNotifUrl :: ContentNotif -> ParamLit
-contentNotifUrl = (M.! "url") . contentParamMap
+contentNotifUrl = (M.! hub_url) . contentParamMap
 
-validateSubReqParams :: ReaderT (M.Map String ParamLit) (Either String) SubReq
+validateSubReqParams :: ReaderT (M.Map B.ByteString ParamLit) (Either String) SubReq
 validateSubReqParams = do
   validateCallback
   validateMode
@@ -111,48 +120,48 @@ validateSubReqParams = do
   validateVerifyToken
   asks SubReq
 
-validateCallback :: ReaderT (M.Map String ParamLit) (Either String) ()
-validateCallback = validatePresence "callback" >>= go
+validateCallback :: ReaderT (M.Map B.ByteString ParamLit) (Either String) ()
+validateCallback = validatePresence hub_callback >>= go
   where
     go (PBytes bytes) = lift $ validateUrl bytes
     go _              = lift $ Left "callback param: invalid format"
 
-validateMode :: ReaderT (M.Map String ParamLit) (Either String) ParamLit
-validateMode = lift . validateFormat isBytes "mode" =<< validatePresence "mode"
+validateMode :: ReaderT (M.Map B.ByteString ParamLit) (Either String) ParamLit
+validateMode = lift . validateFormat isBytes hub_mode =<< validatePresence hub_mode
 
-validateVerify :: ReaderT (M.Map String ParamLit) (Either String) ParamLit
-validateVerify = lift . validateFormat (\p -> isBytes p || isList p) "verify" =<< validatePresence "verify"
+validateVerify :: ReaderT (M.Map B.ByteString ParamLit) (Either String) ParamLit
+validateVerify = lift . validateFormat (\p -> isBytes p || isList p) hub_verify =<< validatePresence hub_verify
 
-validateLeaseSeconds :: ReaderT (M.Map String ParamLit) (Either String) ()
-validateLeaseSeconds = validateOptional (validateFormat isInt "lease_seconds") "lease_seconds"
+validateLeaseSeconds :: ReaderT (M.Map B.ByteString ParamLit) (Either String) ()
+validateLeaseSeconds = validateOptional (validateFormat isInt hub_lease_seconds) hub_lease_seconds
 
-validateSecret :: ReaderT (M.Map String ParamLit) (Either String) ()
-validateSecret = validateOptional (validateFormat isBytes "secret") "secret"
+validateSecret :: ReaderT (M.Map B.ByteString ParamLit) (Either String) ()
+validateSecret = validateOptional (validateFormat isBytes hub_secret) hub_secret
 
-validateVerifyToken :: ReaderT (M.Map String ParamLit) (Either String) ()
-validateVerifyToken = validateOptional (validateFormat isBytes "verify_token") "verify_token"
+validateVerifyToken :: ReaderT (M.Map B.ByteString ParamLit) (Either String) ()
+validateVerifyToken = validateOptional (validateFormat isBytes hub_verify_token) hub_verify_token
 
 validateOptional :: (ParamLit -> Either String a)
-                 -> String
-                 -> ReaderT (M.Map String ParamLit) (Either String) ()
+                 -> B.ByteString
+                 -> ReaderT (M.Map B.ByteString ParamLit) (Either String) ()
 validateOptional k key = do
   param <- asks (M.lookup key)
   maybe (return ()) (lift . fmap (const ()) . k) param
 
 validateFormat :: (ParamLit -> Bool)
-               -> String
+               -> B.ByteString
                -> ParamLit
                -> Either String ParamLit
 validateFormat p key param
   | p param   = return param
-  | otherwise = Left $ key ++ ": invalid format"
+  | otherwise = Left $ (show key) ++ ": invalid format"
 
-validatePresence :: String -> ReaderT (M.Map String ParamLit) (Either String) ParamLit
+validatePresence :: B.ByteString -> ReaderT (M.Map B.ByteString ParamLit) (Either String) ParamLit
 validatePresence key = do
   p <- asks (M.lookup key)
   case p of
     Just param -> return param
-    Nothing    -> lift $ Left $ key ++ " param is mandatory"
+    Nothing    -> lift $ Left $ (show key) ++ " param is mandatory"
 
 validateUrl :: B.ByteString -> Either String ()
 validateUrl input = bimap show (const ()) (parse parser "" input *> pure ())
@@ -166,3 +175,30 @@ validateUrl input = bimap show (const ()) (parse parser "" input *> pure ())
 parseInt :: B.ByteString -> Either String Int
 parseInt input = bimap show id (parse parser "" input)
   where  parser = read <$> some digit <* eof
+
+hub_callback :: B.ByteString
+hub_callback = "hub.callback"
+
+hub_mode :: B.ByteString
+hub_mode = "hub.mode"
+
+hub_topic :: B.ByteString
+hub_topic = "hub.topic"
+
+hub_verify :: B.ByteString
+hub_verify = "hub.verify"
+
+hub_lease_seconds :: B.ByteString
+hub_lease_seconds = "hub.lease_seconds"
+
+hub_secret :: B.ByteString
+hub_secret = "hub.secret"
+
+hub_verify_token :: B.ByteString
+hub_verify_token = "hub.verify_token"
+
+hub_url :: B.ByteString
+hub_url = "hub.url"
+
+hub_challenge :: B.ByteString
+hub_challenge = "hub.challenge"
