@@ -29,7 +29,8 @@ module PubSubHubBub.Types (ParamLit(..)
                           ,hub_secret
                           ,hub_verify_token
                           ,hub_url
-                          ,hub_challenge) where
+                          ,hub_challenge
+                          ,validateVerifParams) where
 
 import           Control.Applicative
 import           Control.Monad.Reader
@@ -53,7 +54,7 @@ data ParamLit = PInt Int
               | PList [ParamLit]
 
 newtype SubReq = SubReq { subParamMap :: M.Map B.ByteString ParamLit }
-newtype Verif = VerifSubReq { verifParamMap :: M.Map B.ByteString ParamLit }
+newtype Verif = Verif { verifParamMap :: M.Map B.ByteString ParamLit }
 newtype ContentNotif = ContentNotif { contentParamMap :: M.Map B.ByteString ParamLit }
 
 isBytes :: ParamLit -> Bool
@@ -112,13 +113,23 @@ contentNotifUrl = (M.! hub_url) . contentParamMap
 
 validateSubReqParams :: ReaderT (M.Map B.ByteString ParamLit) (Either String) SubReq
 validateSubReqParams = do
-  validateCallback
+  validateUrlParam hub_callback
+  validateUrlParam hub_topic
   validateMode
   validateVerify
   validateLeaseSeconds
   validateSecret
   validateVerifyToken
   asks SubReq
+
+validateVerifParams :: ReaderT (M.Map B.ByteString ParamLit) (Either String) Verif
+validateVerifParams = do
+  validateMode
+  validateUrlParam hub_topic
+  validateChallenge
+  validateLeaseSeconds
+  validateVerifyToken
+  asks Verif
 
 validateCallback :: ReaderT (M.Map B.ByteString ParamLit) (Either String) ()
 validateCallback = validatePresence hub_callback >>= go
@@ -137,6 +148,15 @@ validateLeaseSeconds = validateOptional (validateFormat isInt hub_lease_seconds)
 
 validateSecret :: ReaderT (M.Map B.ByteString ParamLit) (Either String) ()
 validateSecret = validateOptional (validateFormat isBytes hub_secret) hub_secret
+
+validateChallenge :: ReaderT (M.Map B.ByteString ParamLit) (Either String) ()
+validateChallenge = validatePresence hub_challenge >>= (lift . fmap (const ())  . validateFormat isBytes hub_challenge)
+
+validateUrlParam :: B.ByteString ->  ReaderT (M.Map B.ByteString ParamLit) (Either String) ()
+validateUrlParam key = validatePresence key >>= go
+  where
+    go (PBytes bytes) = lift $ validateUrl bytes
+    go _              = lift $ Left $ (show key) ++ " param: invalid format"
 
 validateVerifyToken :: ReaderT (M.Map B.ByteString ParamLit) (Either String) ()
 validateVerifyToken = validateOptional (validateFormat isBytes hub_verify_token) hub_verify_token

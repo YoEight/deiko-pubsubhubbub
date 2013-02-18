@@ -1,5 +1,5 @@
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE TupleSections     #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TupleSections    #-}
 
 module PubSubHubBub.Parse where
 
@@ -41,12 +41,20 @@ makeMapParam k = repeatedly (await >>= go)
     makeMap (key, lit) = modify (step key lit)
     step key lit map = M.insertWith (k key) key lit map
 
-makeSubReq :: Process (M.Map B.ByteString ParamLit) (Either String SubReq)
-makeSubReq = repeatedly $ await >>= go
+makeSubReq :: Process [(B.ByteString, ParamLit)] (Either String SubReq)
+makeSubReq = make validateSubReqParams <~ makeMapParam subReqSelector
+
+makeVerif :: Process [(B.ByteString, ParamLit)] (Either String Verif)
+makeVerif = make validateVerifParams <~ makeMapParam youngerSelector
+
+make :: ReaderT (M.Map B.ByteString ParamLit) (Either String) a
+     -> Process (M.Map B.ByteString ParamLit) (Either String a)
+make valid = repeatedly $ await >>= go
   where
     go map =
-      let validation = runReaderT validateSubReqParams map
+      let validation = runReaderT valid map
       in yield validation *> empty
+
 
 subReqSelector :: B.ByteString
                -> ParamLit
@@ -55,6 +63,12 @@ subReqSelector :: B.ByteString
 subReqSelector key new old
   | key == hub_verify = merge new old
   | otherwise         = new
+
+youngerSelector :: B.ByteString
+                -> ParamLit
+                -> ParamLit
+                -> ParamLit
+youngerSelector = const const
 
 merge :: ParamLit -> ParamLit -> ParamLit
 merge n (PList xs) = PList (xs ++ [n])
