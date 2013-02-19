@@ -30,6 +30,7 @@ module PubSubHubBub.Types (ParamLit(..)
                           ,hub_verify_token
                           ,hub_url
                           ,hub_challenge
+                          ,hub_topic
                           ,validateVerifParams
                           ,validateNotifParams) where
 

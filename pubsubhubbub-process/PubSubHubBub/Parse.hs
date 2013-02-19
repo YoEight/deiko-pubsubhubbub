@@ -39,7 +39,7 @@ makeMapParam k = repeatedly (await >>= go)
       let map = execState (traverse_ makeMap xs) M.empty
       in yield map *> empty
     makeMap (key, lit) = modify (step key lit)
-    step key lit map = M.insertWith (k key) key lit map
+    step key = M.insertWith (k key) key
 
 makeSubReq :: Process [(B.ByteString, ParamLit)] (Either String SubReq)
 makeSubReq = make validateSubReqParams <~ makeMapParam subReqSelector
