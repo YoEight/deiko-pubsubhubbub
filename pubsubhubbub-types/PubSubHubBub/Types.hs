@@ -2,7 +2,7 @@
 module PubSubHubBub.Types (ParamLit(..)
                           ,SubReq
                           ,Verif
-                          ,ContentNotif
+                          ,Notif
                           ,isBytes
                           ,isInt
                           ,isList
@@ -30,7 +30,8 @@ module PubSubHubBub.Types (ParamLit(..)
                           ,hub_verify_token
                           ,hub_url
                           ,hub_challenge
-                          ,validateVerifParams) where
+                          ,validateVerifParams
+                          ,validateNotifParams) where
 
 import           Control.Applicative
 import           Control.Monad.Reader
@@ -55,7 +56,7 @@ data ParamLit = PInt Int
 
 newtype SubReq = SubReq { subParamMap :: M.Map B.ByteString ParamLit }
 newtype Verif = Verif { verifParamMap :: M.Map B.ByteString ParamLit }
-newtype ContentNotif = ContentNotif { contentParamMap :: M.Map B.ByteString ParamLit }
+newtype Notif = Notif { contentParamMap :: M.Map B.ByteString ParamLit }
 
 isBytes :: ParamLit -> Bool
 isBytes (PBytes _) = True
@@ -105,10 +106,10 @@ verifLeaseSeconds = (M.lookup hub_lease_seconds) . verifParamMap
 verifVerifyToken :: Verif -> Maybe ParamLit
 verifVerifyToken = (M.lookup hub_verify_token) . verifParamMap
 
-contentNotifMode :: ContentNotif -> ParamLit
+contentNotifMode :: Notif -> ParamLit
 contentNotifMode = (M.! hub_mode) . contentParamMap
 
-contentNotifUrl :: ContentNotif -> ParamLit
+contentNotifUrl :: Notif -> ParamLit
 contentNotifUrl = (M.! hub_url) . contentParamMap
 
 validateSubReqParams :: ReaderT (M.Map B.ByteString ParamLit) (Either String) SubReq
@@ -130,6 +131,12 @@ validateVerifParams = do
   validateLeaseSeconds
   validateVerifyToken
   asks Verif
+
+validateNotifParams :: ReaderT (M.Map B.ByteString ParamLit) (Either String) Notif
+validateNotifParams = do
+  validateMode
+  validateUrlParam hub_url
+  asks Notif
 
 validateCallback :: ReaderT (M.Map B.ByteString ParamLit) (Either String) ()
 validateCallback = validatePresence hub_callback >>= go

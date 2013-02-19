@@ -47,6 +47,9 @@ makeSubReq = make validateSubReqParams <~ makeMapParam subReqSelector
 makeVerif :: Process [(B.ByteString, ParamLit)] (Either String Verif)
 makeVerif = make validateVerifParams <~ makeMapParam youngerSelector
 
+makeNotif :: Process [(B.ByteString, ParamLit)] (Either String Notif)
+makeNotif = make validateNotifParams <~ makeMapParam youngerSelector
+
 make :: ReaderT (M.Map B.ByteString ParamLit) (Either String) a
      -> Process (M.Map B.ByteString ParamLit) (Either String a)
 make valid = repeatedly $ await >>= go
@@ -54,7 +57,6 @@ make valid = repeatedly $ await >>= go
     go map =
       let validation = runReaderT valid map
       in yield validation *> empty
-
 
 subReqSelector :: B.ByteString
                -> ParamLit
@@ -73,6 +75,3 @@ youngerSelector = const const
 merge :: ParamLit -> ParamLit -> ParamLit
 merge n (PList xs) = PList (xs ++ [n])
 merge n o          = PList [o, n]
-
-subReqMap :: Process [(B.ByteString, ParamLit)] (M.Map B.ByteString ParamLit)
-subReqMap = makeMapParam subReqSelector
