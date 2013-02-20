@@ -5,6 +5,7 @@ import           Control.Monad.State
 
 import qualified Data.ByteString            as B
 import           Data.Char
+import           Data.Foldable hiding (foldr1)
 import           Data.Machine
 import qualified Data.Map                   as M
 import           Data.Maybe
@@ -44,7 +45,6 @@ insertLit k key t = M.insert key (go $ k t)
 confirmationRequestParams :: SubReq -> IO (M.Map B.ByteString B.ByteString)
 confirmationRequestParams req = execStateT go M.empty
   where
-    go :: StateT (M.Map B.ByteString B.ByteString) IO ()
     go = do
       challenge <- lift $ randomString
       modify (insertLit subReqMode hub_mode req)
@@ -52,6 +52,12 @@ confirmationRequestParams req = execStateT go M.empty
       modify (insertOptional subReqLeaseSeconds hub_lease_seconds req)
       modify (insertOptional subReqVerifyToken hub_verify_token req)
       modify (M.insert hub_challenge (packString challenge))
+
+makeQueryString :: M.Map B.ByteString B.ByteString -> String
+makeQueryString = ('?':) . foldr1 amp . fmap query . M.toList
+  where
+    query (key, value) = (show key) ++ "=" ++ (show value)
+    amp q q' = q ++ "&" ++ q'
 
 randomString :: IO String
 randomString = do
