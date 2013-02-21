@@ -10,6 +10,7 @@ import           Data.Foldable              hiding (foldr1)
 import           Data.Machine
 import qualified Data.Map                   as M
 import           Data.Maybe
+import           Data.Word
 
 import           Control.Monad.Random
 import           Control.Monad.Random.Class
@@ -45,14 +46,27 @@ insertLit k key t = M.insert key (go $ k t)
     go (PBytes xs) = xs
     go (PInt i)    = packString (show i)
 
-verifyHttpRequest :: SubReq -> IO (Int, B.ByteString)
+verifyHttpRequest :: SubReq -> IO (Int, B.ByteString, B.ByteString)
 verifyHttpRequest req = do
   params <- confirmationRequestParams req
   let callback     = subReqCallbackUrl req
       query_string = makeQueryString params
       url          = callback ++ query_string
   response <- withCurlDo $ curlGetResponse_ url [] :: IO (CurlResponse_ [(String, String)] B.ByteString)
-  return (respStatus response, respBody response)
+  return (respStatus response, params M.! hub_challenge, respBody response)
+
+validateVerifyResponse :: (Int, B.ByteString, B.ByteString) -> Either String ()
+validateVerifyResponse (ret, challenge, content)
+  | ret == 404              = Left "verification: unreachable callback url"
+  | 200 >= ret && ret < 300 = validateVerifyContent challenge content
+  | otherwise               = Left "verification: error during confirmation"
+
+validateVerifyContent :: B.ByteString -> B.ByteString -> Either String ()
+validateVerifyContent challenge = go . B.breakSubstring (B.snoc hub_challenge equal)
+  where
+    go (ans, challenge')
+      | not (B.null ans) && challenge == challenge' = Right ()
+      | otherwise                                   = Left "verification: challenge paraphrase doesn't match"
 
 confirmationRequestParams :: SubReq -> IO (M.Map B.ByteString B.ByteString)
 confirmationRequestParams req = execStateT go M.empty
@@ -87,3 +101,6 @@ randomString = do
 -- This is very unfortunate. But not all dependencies have migrated to bytestring 0.10.2.*
 packString :: String -> B.ByteString
 packString = B.pack . fmap (fromInteger . toInteger . ord)
+
+equal :: Word8
+equal = 61
