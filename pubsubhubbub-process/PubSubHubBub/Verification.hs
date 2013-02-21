@@ -4,8 +4,9 @@ module PubSubHubBub.Verification where
 import           Control.Monad.State
 
 import qualified Data.ByteString            as B
+import qualified Data.ByteString.Char8      as C
 import           Data.Char
-import           Data.Foldable hiding (foldr1)
+import           Data.Foldable              hiding (foldr1)
 import           Data.Machine
 import qualified Data.Map                   as M
 import           Data.Maybe
@@ -18,6 +19,8 @@ import           Control.Monad.Trans.Either
 import           PubSubHubBub.Types
 
 import           System.Random
+
+import           Network.Curl
 
 subReqVerif :: SubReq -> Machine (EitherT String IO) SubReq
 subReqVerif req = error "todo"
@@ -42,6 +45,15 @@ insertLit k key t = M.insert key (go $ k t)
     go (PBytes xs) = xs
     go (PInt i)    = packString (show i)
 
+verifyHttpRequest :: SubReq -> IO (Int, B.ByteString)
+verifyHttpRequest req = do
+  params <- confirmationRequestParams req
+  let callback     = subReqCallbackUrl req
+      query_string = makeQueryString params
+      url          = callback ++ query_string
+  response <- withCurlDo $ curlGetResponse_ url [] :: IO (CurlResponse_ [(String, String)] B.ByteString)
+  return (respStatus response, respBody response)
+
 confirmationRequestParams :: SubReq -> IO (M.Map B.ByteString B.ByteString)
 confirmationRequestParams req = execStateT go M.empty
   where
@@ -53,10 +65,15 @@ confirmationRequestParams req = execStateT go M.empty
       modify (insertOptional subReqVerifyToken hub_verify_token req)
       modify (M.insert hub_challenge (packString challenge))
 
+subReqCallbackUrl :: SubReq -> String
+subReqCallbackUrl = go . subReqCallback
+  where
+    go (PBytes xs) = C.unpack xs
+
 makeQueryString :: M.Map B.ByteString B.ByteString -> String
 makeQueryString = ('?':) . foldr1 amp . fmap query . M.toList
   where
-    query (key, value) = (show key) ++ "=" ++ (show value)
+    query (key, value) = (C.unpack key) ++ "=" ++ (C.unpack value)
     amp q q' = q ++ "&" ++ q'
 
 randomString :: IO String
