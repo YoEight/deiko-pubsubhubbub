@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 module PubSubHubBub.Verification where
 
 import           Control.Monad.State
@@ -23,8 +22,11 @@ import           System.Random
 
 import           Network.Curl
 
-subReqVerif :: SubReq -> Machine (EitherT String IO) SubReq
-subReqVerif req = error "todo"
+verification :: SubReq -> Machine (EitherT String IO) SubReq
+verification req =
+  let http   = fmap validateVerifyResponse $ verifyHttpRequest req
+      either = fmap (const req) $ EitherT http
+  in lift either
 
 insertOptional :: (a -> Maybe ParamLit)
                -> B.ByteString
