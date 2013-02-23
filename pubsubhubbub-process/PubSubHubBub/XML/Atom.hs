@@ -15,9 +15,10 @@ data AtomLit = AId String
 
 data FeedLit = FPair String String
              | FUpdated String
-             | FEntries [Entry] deriving Show
+             | FEntry Entry deriving Show
 
-data Feed = Feed { feedAttrs :: M.Map String FeedLit } deriving Show
+data Feed = Feed { feedAttrs   :: M.Map String String
+                 , feedEntries :: [Entry] } deriving Show
 
 data Entry = Entry { entryAttrs :: M.Map String AtomLit } deriving Show
 
@@ -48,7 +49,7 @@ instance XmlPickler Entry where
   xpickle =
     xpWrap (Entry . M.fromList . fmap tupled, fmap snd . M.toList . entryAttrs) $
     xpElem "entry" $
-    xpList xpickle
+    xpickle
     where
       tupled x@(AId _)      = ("id", x)
       tupled x@(ATitle _)   = ("title", x)
@@ -64,28 +65,46 @@ instance XmlPickler FeedLit where
                   xpPair (xpAttr "rel" xpText0) (xpAttr "href" xpText0)
         updated = xpElem "updated" $
                   xpWrap (FUpdated, \(FUpdated x) -> x) xpText0
-        entries = xpWrap (FEntries, \(FEntries x) -> x) $
-                  xpList xpickle
+        entries = xpWrap (FEntry, \(FEntry x) -> x) xpickle
         selector (FPair _ _)  = 0
         selector (FUpdated _) = 1
-        selector (FEntries _) = 2
+        selector (FEntry _) = 2
     in xpAlt selector [pair, updated, entries]
 
 instance XmlPickler Feed where
   xpickle =
     xpElemNS "" "atom" "feed" $
-    xpWrap (Feed . M.fromList . fmap tupled, fmap snd . M.toList . feedAttrs) $
-    xpList xpickle
+    xpWrap (listToFeed, feedToList) $
+    xpickle
     where
-      tupled x@(FPair k _)  = (k, x)
-      tupled x@(FUpdated _) = ("updated", x)
-      tupled x@(FEntries _) = ("entries", x)
+      feedToList (Feed map entries) =
+        (fmap toLit $ M.toList map) ++ (fmap FEntry entries)
+      toLit (k, v)
+        | isLink k = FPair k v
+        | k == "updated" = FUpdated v
+        | otherwise      = error $ "Not supported FeedLiteral -> " ++ k
+      listToFeed xs =
+        let go map es []     = Feed map es
+            go map es (x:xs) =
+              case x of
+                FEntry e -> go map (e:es) xs
+                r        ->
+                  let (key, value) = mapping r
+                  in go (M.insert key value map) es xs
+            mapping (FPair k v)  = (k, v)
+            mapping (FUpdated v) = ("updated", v)
+        in go M.empty [] xs
 
-location = "/Users/yoeight/Desktop/titi.xml"
+isLink :: String -> Bool
+isLink "hub"  = True
+isLink "self" = True
+isLink _      = False
+
+location = "/Users/yoeight/Desktop/atom.xml"
 
 main = runX (application location)
 
-application :: String -> IOSArrow b Entry
+application :: String -> IOSArrow b Feed
 application src =
   configSysVars [withTrace 2, withRemoveWS yes]
   >>> readDocument [withValidate no, withSubstDTDEntities  no] src
