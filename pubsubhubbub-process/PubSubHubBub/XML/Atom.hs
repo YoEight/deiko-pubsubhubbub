@@ -1,8 +1,12 @@
 module PubSubHubBub.XML.Atom where
 
+import           Control.Applicative
 import           Control.Arrow
+import           Control.Monad.Trans
 
-import qualified Data.Map          as M
+import           Data.Foldable       hiding (foldl)
+import           Data.Machine
+import qualified Data.Map            as M
 
 import           Text.XML.HXT.Core
 
@@ -84,30 +88,34 @@ instance XmlPickler Feed where
         | k == "updated" = FUpdated v
         | otherwise      = error $ "Not supported FeedLiteral -> " ++ k
       listToFeed xs =
-        let go map es []     = Feed map es
-            go map es (x:xs) =
+        let (map, entries) = foldl go (M.empty, []) xs
+            go (map, es) x =
               case x of
-                FEntry e -> go map (e:es) xs
+                FEntry e -> (map, e:es)
                 r        ->
                   let (key, value) = mapping r
-                  in go (M.insert key value map) es xs
+                  in (M.insert key value map, es)
             mapping (FPair k v)  = (k, v)
             mapping (FUpdated v) = ("updated", v)
-        in go M.empty [] xs
+        in Feed map entries
 
 isLink :: String -> Bool
 isLink "hub"  = True
 isLink "self" = True
 isLink _      = False
 
-location = "/Users/yoeight/Desktop/atom.xml"
-
-main = runX (application location)
+parseAtomFeed :: MonadIO m => String -> Machine m Feed
+parseAtomFeed src = construct go
+  where
+    go = do
+      feeds <- liftIO $ runX (application src)
+      traverse_ yield feeds
+      empty
 
 application :: String -> IOSArrow b Feed
 application src =
   configSysVars [withTrace 2, withRemoveWS yes]
-  >>> readDocument [withValidate no, withSubstDTDEntities  no] src
+  >>> readString [withValidate no, withSubstDTDEntities  no] src
   >>> getChildren
   >>> isElem
   >>> xunpickleVal xpickle
