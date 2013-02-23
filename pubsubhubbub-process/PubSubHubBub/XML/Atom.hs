@@ -2,6 +2,12 @@ module PubSubHubBub.XML.Atom (Source
                              ,Feed
                              ,Entry
                              ,feedEntries
+                             ,feedHub
+                             ,feedSelf
+                             ,feedUpdated
+                             ,feedSource
+                             ,feedTitle
+                             ,feedId
                              ,entrySource
                              ,entryTitle
                              ,entryLink
@@ -141,6 +147,36 @@ atomLitMapping x@(ALink _)    = ("link", x)
 atomLitMapping x@(ASummary _) = ("summary", x)
 atomLitMapping x@(ASource _)  = ("source", x)
 atomLitMapping x@(AAuthor _)  = ("author", x)
+
+feedHub :: Feed -> Maybe String
+feedHub = fmap go . (M.lookup "hub") . feedAttrs
+  where
+    go (ALink (Link _ v)) = v
+
+feedSelf :: Feed -> Maybe String
+feedSelf = fmap go . M.lookup "self" . feedAttrs
+  where
+    go (ALink (Link _ v)) = v
+
+feedUpdated :: Feed -> String
+feedUpdated = go . (M.! "updated") . feedAttrs
+  where
+    go (AUpdated (Updated u)) = u
+
+feedSource :: Feed -> Maybe Source
+feedSource = fmap go . M.lookup "source" . feedAttrs
+  where
+    go (ASource s) = s
+
+feedTitle :: Feed -> Maybe String
+feedTitle = fmap go . M.lookup "title" . feedAttrs
+  where
+    go (ATitle (Title t)) = t
+
+feedId :: Feed -> Maybe String
+feedId = fmap go . M.lookup "id" . feedAttrs
+  where
+    go (AId (Id i)) = i
 
 entrySource :: Entry -> Maybe Source
 entrySource = fmap go . M.lookup "source" . entryAttrs
