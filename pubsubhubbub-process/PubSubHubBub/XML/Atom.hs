@@ -1,4 +1,14 @@
-module PubSubHubBub.XML.Atom where
+module PubSubHubBub.XML.Atom (Source
+                             ,Feed
+                             ,Entry
+                             ,feedEntries
+                             ,entrySource
+                             ,entryTitle
+                             ,entryLink
+                             ,entryId
+                             ,entryUpdated
+                             ,entryContent
+                             ,entrySummary) where
 
 import           Control.Applicative
 import           Control.Arrow
@@ -122,11 +132,6 @@ instance XmlPickler Feed where
             mapping (FAtom a) = atomLitMapping a
         in Feed map entries
 
-isLink :: String -> Bool
-isLink "hub"  = True
-isLink "self" = True
-isLink _      = False
-
 atomLitMapping :: AtomLit -> (String, AtomLit)
 atomLitMapping x@(AId _)      = ("id", x)
 atomLitMapping x@(ATitle _)   = ("title", x)
@@ -136,6 +141,41 @@ atomLitMapping x@(ALink _)    = ("link", x)
 atomLitMapping x@(ASummary _) = ("summary", x)
 atomLitMapping x@(ASource _)  = ("source", x)
 atomLitMapping x@(AAuthor _)  = ("author", x)
+
+entrySource :: Entry -> Maybe Source
+entrySource = fmap go . M.lookup "source" . entryAttrs
+  where
+    go (ASource s) = s
+
+entryTitle :: Entry -> String
+entryTitle = go . (M.! "title") . entryAttrs
+  where
+    go (ATitle (Title t)) = t
+
+entryLink :: Entry -> String
+entryLink = go . (M.! "link") . entryAttrs
+  where
+    go (ALink (SimpleLink l)) = l
+
+entryId :: Entry -> String
+entryId = go . (M.! "id") . entryAttrs
+  where
+    go (AId (Id i)) = i
+
+entryUpdated :: Entry -> String
+entryUpdated = go . (M.! "updated") . entryAttrs
+  where
+    go (AUpdated (Updated u)) = u
+
+entryContent :: Entry -> Maybe String
+entryContent = fmap go . (M.lookup "content") . entryAttrs
+  where
+    go (AContent c) = c
+
+entrySummary :: Entry -> Maybe String
+entrySummary = fmap go . (M.lookup "summary") . entryAttrs
+  where
+    go (ASummary s) = s
 
 parseAtomFeed :: MonadIO m => String -> Machine m Feed
 parseAtomFeed src = construct go
