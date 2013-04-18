@@ -1,30 +1,32 @@
-{-# LANGUAGE OverloadedStrings, FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
 
-import Web.Deiko.Hub.Types
-import Web.Deiko.Hub.Persist
-import Web.Deiko.Hub.Parse
+import           Web.Deiko.Hub.Parse
+import           Web.Deiko.Hub.Persist
+import           Web.Deiko.Hub.Types
 
-import Control.Applicative
-import Control.Arrow ((***))
-import Control.Monad
-import Control.Monad.Trans
+import           Control.Applicative
+import           Control.Arrow              ((***))
+import           Control.Monad
+import           Control.Monad.Trans
 
-import Control.Monad.Error
-import Control.Monad.Trans.Either
+import           Control.Monad.Error
+import           Control.Monad.Trans.Either
 
-import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as L
-import Data.String
-import Data.Traversable (traverse)
-import qualified Data.Text.Lazy as T
-import qualified Data.Text as S
-import Data.Text.Encoding (encodeUtf8, decodeUtf8)
-import Data.Time.Clock (getCurrentTime)
+import qualified Data.ByteString            as B
+import qualified Data.ByteString.Lazy       as L
+import           Data.String
+import qualified Data.Text                  as S
+import           Data.Text.Encoding         (decodeUtf8, encodeUtf8)
+import qualified Data.Text.Lazy             as T
+import           Data.Time.Clock            (getCurrentTime)
+import           Data.Traversable           (traverse)
 
-import Network.Curl
-import Network.HTTP.Types.Status
+import           Network.Curl
+import           Network.HTTP.Types.Status
 
-import Web.Scotty
+import           Web.Scotty
 
 main = scotty 3000 $ do
          post "/hub" $ go =<< param "hub.mode"
@@ -43,7 +45,7 @@ errorHandle (ParseError e)     = status status400 >> text e
 errorHandle (InternalError e)  = status status500 >> text e >> (liftIO $ print e)
 
 subscription :: ActionM ()
-subscription = do 
+subscription = do
   xs     <- params
   report <- runEitherT $ process $ fmap (T.toStrict *** T.toStrict) xs
   either errorHandle status report
@@ -68,7 +70,7 @@ publish = do
 
 -- testing
 readFromRedis :: ActionM()
-readFromRedis = do 
+readFromRedis = do
   callback <- param "hub.callback"
   report   <- runEitherT $ process callback
   either errorHandle (text . fromString . show) (report :: Either HubError [HubEvent])
@@ -77,7 +79,7 @@ readFromRedis = do
                               traverse fromByteString bytes
 
 makeSubscription :: (MonadIO m, Applicative m) => HubRequest -> m HubEvent
-makeSubscription req = (Subscription 1) <$> currentTime <*> pure req 
+makeSubscription req = (Subscription 1) <$> currentTime <*> pure req
     where
       currentTime = liftIO getCurrentTime
 
@@ -92,15 +94,15 @@ verifyRequest (HubRequest callback mode topic verify _) = go verify
                           response  <- liftIO $ (curlGetResponse_ (url $ query $ parameters challenge) [] :: IO (CurlResponse_ [(String, String)] B.ByteString))
                           case (respStatus response, respBody response) of
                             (200, back)
-                                | back == (encodeUtf8 challenge) -> 
+                                | back == (encodeUtf8 challenge) ->
                                     do let encodedTopic    = encodeUtf8 topic
-                                           encodedCallback = encodeUtf8 callback 
-                                       executeRedis $ saveHubEvent encodedCallback encodedTopic Verify 
-                                       withSqliteConnection $ \handle -> 
+                                           encodedCallback = encodeUtf8 callback
+                                       executeRedis $ saveHubEvent encodedCallback encodedTopic Verify
+                                       withSqliteConnection $ \handle ->
                                            let unregister      = unregisterSubscription handle encodedTopic encodedCallback
                                                register        = registerSubscription handle encodedTopic encodedCallback
                                            in unregister >> register
-                                       return status200
+                                       return status204
                             _ -> throwError VerificationFailed
       go (_:xs)      = go xs
       go []          = throwError $ BadRequest "Unsupported verification mode"
@@ -110,7 +112,7 @@ verifyRequest (HubRequest callback mode topic verify _) = go verify
                              ,S.append "hub.topic" $ S.append "=" topic
                              ,S.append "hub.challenge" $ S.append "=" challenge
                              ,"hub.lease_seconds=10"]
-  
+
 instance Applicative ActionM where
     pure = return
     (<*>) = ap
