@@ -5,6 +5,7 @@
 import           Web.Deiko.Hub.Parse
 import           Web.Deiko.Hub.Persist
 import           Web.Deiko.Hub.Types
+import           Web.Deiko.Hub.XML.Atom
 
 import           Control.Applicative
 import           Control.Arrow              ((***))
