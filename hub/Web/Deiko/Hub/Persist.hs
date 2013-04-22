@@ -6,11 +6,15 @@ module Web.Deiko.Hub.Persist where
 
 import           Web.Deiko.Hub.Types
 
+import           Control.Applicative
 import           Control.Monad.Error
 import           Control.Monad.Trans
 
 import qualified Data.ByteString     as B
+import           Data.Foldable
+import           Data.Monoid
 import           Data.String
+import           Data.Traversable
 
 import           Database.Redis
 import           Database.SQLite
@@ -50,6 +54,9 @@ pushPublishEvent url e = rpush (B.append "publish:events:" url) [toByteString e]
 pushAsyncSubRequest :: RedisCtx m f => HubRequest -> m (f Integer)
 pushAsyncSubRequest = rpush "subscription:queue" . return . toByteString
 
+popAsyncSubRequest :: (RedisCtx m f, Applicative m, Traversable f) => m (f (Maybe HubRequest))
+popAsyncSubRequest = lpop "subscription:request" >>= (traverse (traverse fromByteString))
+
 pushPublishQueue :: RedisCtx m f => B.ByteString -> m (f Integer)
 pushPublishQueue  = rpush "publish:queue" . return
 
@@ -87,3 +94,12 @@ registerSubscription handle topic callback =
              query  = "insert into subscriptions (topic_id, callback_id) values (:topic_id, :callback_id)"
              params = [(":topic_id", Blob topic)
                       ,(":callback_id", Blob callback)]
+
+-- What a shame this isn't in stlib
+instance Foldable (Either a) where
+    foldMap f (Right a) = f a
+    foldMap _ _         = mempty
+
+instance Traversable (Either a) where
+    traverse f (Right b) = Right <$> (f b)
+    traverse _ (Left a)  = pure (Left a)

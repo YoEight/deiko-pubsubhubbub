@@ -86,6 +86,17 @@ makeSubscription req = (Subscription 1) <$> currentTime <*> pure req
 randomString :: (MonadIO m, IsString s) => m s
 randomString = return "test_challenge"
 
+asyncSubQueueLoop :: (HubRequest -> IO a) -> IO ()
+asyncSubQueueLoop handle = do result <- runEitherT $ executeRedis popAsyncSubRequest
+                              either (print . show) go result
+                                  where
+                                    go = maybe (return ()) ((asyncSubQueueLoop handle <*) . handle)
+ 
+asyncVerification :: IO ()
+asyncVerification = asyncSubQueueLoop ((go =<<) . runEitherT . verifyRequest)
+    where
+      go = either (print . show) (const $ return ())
+
 verifyRequest :: (MonadIO m, MonadError HubError m) => HubRequest -> m Status
 verifyRequest req@(HubRequest callback mode topic verify _) = go verify
     where
