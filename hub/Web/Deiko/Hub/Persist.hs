@@ -47,6 +47,9 @@ pushPublishEvent :: RedisCtx m f
                  -> m (f Integer)
 pushPublishEvent url e = rpush (B.append "publish:events:" url) [toByteString e]
 
+pushAsyncSubRequest :: RedisCtx m f => HubRequest -> m (f Integer)
+pushAsyncSubRequest = rpush "subscription:queue" . return . toByteString
+
 pushPublishQueue :: RedisCtx m f => B.ByteString -> m (f Integer)
 pushPublishQueue  = rpush "publish:queue" . return
 

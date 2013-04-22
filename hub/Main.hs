@@ -5,7 +5,6 @@
 import           Web.Deiko.Hub.Parse
 import           Web.Deiko.Hub.Persist
 import           Web.Deiko.Hub.Types
-import           Web.Deiko.Hub.XML.Atom
 
 import           Control.Applicative
 import           Control.Arrow              ((***))
@@ -88,9 +87,9 @@ randomString :: (MonadIO m, IsString s) => m s
 randomString = return "test_challenge"
 
 verifyRequest :: (MonadIO m, MonadError HubError m) => HubRequest -> m Status
-verifyRequest (HubRequest callback mode topic verify _) = go verify
+verifyRequest req@(HubRequest callback mode topic verify _) = go verify
     where
-      go ("async":_) = return status202
+      go ("async":_) = executeRedis (pushAsyncSubRequest req) >> return status202
       go ("sync":_)  = do challenge <- randomString
                           response  <- liftIO $ (curlGetResponse_ (url $ query $ parameters challenge) [] :: IO (CurlResponse_ [(String, String)] B.ByteString))
                           case (respStatus response, respBody response) of
