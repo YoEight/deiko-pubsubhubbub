@@ -7,27 +7,39 @@ module Web.Deiko.Hub.Types where
 import           Prelude              hiding (lookup)
 
 import           Control.Monad
+import           Data.Binary
 import           Data.Binary.Get
 import           Data.Binary.Put
 import           Data.Bson
 import           Data.Bson.Binary
 import qualified Data.ByteString      as BS
 import qualified Data.ByteString.Lazy as BL
+import           Data.Foldable        (foldMap)
+import           Data.Hashable
+import           Data.Int
 import qualified Data.Text            as S
 import           Data.Text.Encoding   (encodeUtf8)
 import qualified Data.Text.Lazy       as T
 import           Data.Time.Clock
 
-data HubRequest = HubRequest { hubCallback :: S.Text
-                             , hubMode     :: S.Text
-                             , hubTopic    :: S.Text
-                             , hubVerify   :: [S.Text]
-                             , hubOthers   :: [(S.Text, S.Text)] } deriving Show
+data SubState = Verified
+              | NotVerified
+              | Delete deriving Show
 
-data HubEvent = Subscription { subVersion :: Int
-                             , subDate    :: UTCTime
-                             , subRequest :: HubRequest }
-              | Publish
+data SubParams = SubParams { subCallback     :: S.Text
+                           , subMode         :: S.Text
+                           , subTopic        :: S.Text
+                           , subVerify       :: [S.Text]
+                           , subLeaseSeconds :: Maybe Int
+                           , subSecret       :: Maybe S.Text
+                           , subVerifyToken  :: Maybe S.Text } deriving Show
+
+data Subscription = Sub { subVersion :: Int
+                        , subState   :: SubState
+                        , subParams  :: SubParams
+                        , subDate    :: UTCTime } deriving Show
+
+data HubEvent = Publish
               | Verify deriving Show
 
 data HubError = BadRequest T.Text
@@ -48,60 +60,68 @@ class FromByteString a where
     fromByteString :: Monad m => BS.ByteString -> m a
 
 instance ToBson a => ToByteString a where
-    toByteString = toStrict . runPut . putDocument . toBson
-        where
-          toStrict :: BL.ByteString -> BS.ByteString
-          toStrict = BS.concat . BL.toChunks
+    toByteString = BL.toStrict . runPut . putDocument . toBson
 
-instance ToBson HubRequest where
-    toBson (HubRequest callback mode topic verify others) =
-        merge base rest
+instance ToBson SubParams where
+    toBson (SubParams callback mode topic verify leaseSeconds secret verifyToken) =
+        merge base $ merge lease $ merge sec tok
             where
               base = ["hub.callback" =: callback
-                     ,"hub.mode" =: mode
-                     ,"hub.topic" =: topic
-                     ,"hub.verify" =: verify]
+                     ,"hub.mode"     =: mode
+                     ,"hub.topic"    =: topic
+                     ,"hub.verify"   =: verify]
 
-              rest = ["others" =: map go others]
-                  where
-                    go (label, value) = label =: value
+              lease  = foldMap (\i -> ["hub.lease_seconds" =: i]) leaseSeconds
+              sec    = foldMap (\s -> ["hub.secret" =: s]) secret
+              tok    = foldMap (\t -> ["hub.verify_token" =: t]) verifyToken
 
-instance ToBson HubEvent where
-    toBson (Subscription version date request) =
-         ["event.type" =: ("subscription" :: S.Text)
-         ,"event.version" =: version
-         ,"event.date" =: date
-         ,"event.request" =: toBson request]
+instance ToBson Subscription where
+    toBson (Sub version state params date) =
+         ["state"   =: stateValue state
+         ,"version" =: version
+         ,"date"    =: date
+         ,"params"  =: toBson params]
+        where
+          stateValue :: SubState -> S.Text
+          stateValue Verified    = "verified"
+          stateValue NotVerified = "not_verified"
+          stateValue Delete      = "delete"
 
-    toBson Publish =
-        ["event.type" =: ("publish" :: S.Text)]
-
-    toBson Verify =
-        ["event.type" =: ("verify" :: S.Text)]
+instance Hashable Subscription where
+    hashWithSalt salt sub =
+        let callback = subCallback $ subParams $ sub
+            topic    = subTopic $ subParams $ sub
+        in hashWithSalt salt (callback, topic)
 
 instance FromBson a => FromByteString a where
     fromByteString = fromBson . runGet getDocument . BL.fromChunks . return
 
-instance FromBson HubRequest where
+instance FromBson SubParams where
     fromBson doc = do
       callback <- lookup "hub.callback" doc
       mode     <- lookup "hub.mode" doc
       topic    <- lookup "hub.topic" doc
       verify   <- lookup "hub.verify" doc
-      others   <- return $ maybe [] (map go) (lookup "others" doc)
-      return $ HubRequest callback mode topic verify others
+      return $ SubParams callback mode topic verify (leaseSeconds doc) (secret doc) (verifyToken doc)
           where
-            go (name := (String value)) = (name, value)
+            leaseSeconds :: Document -> Maybe Int
+            leaseSeconds = lookup "hub.lease_seconds"
 
-instance FromBson HubEvent where
-    fromBson doc = do
-      event_type <- lookup "event.type" doc
-      case event_type :: S.Text of
-        "subscription" -> do version <- lookup "event.version" doc
-                             date    <- lookup "event.date" doc
-                             reqDoc  <- lookup "event.request" doc
-                             request <- fromBson reqDoc
-                             return $ Subscription version date request
+            secret, verifyToken :: Document -> Maybe S.Text
+            secret = lookup "hub.secret"
+            verifyToken = lookup "hub.verify_token"
 
-        "publish"      -> return Publish
-        "verify"       -> return Verify
+instance FromBson Subscription where
+    fromBson doc = do state   <- getState doc
+                      version <- lookup "version" doc
+                      date    <- lookup "date" doc
+                      reqDoc  <- lookup "params" doc
+                      params  <- fromBson reqDoc
+                      return $ Sub version state params date
+        where
+          getState = liftM go . lookup "state"
+
+          go :: S.Text -> SubState
+          go "verified"     = Verified
+          go "not_verified" = NotVerified
+          go "delete"       = Delete

@@ -10,8 +10,12 @@ import           Control.Applicative
 import           Control.Monad.Error
 import           Control.Monad.Trans
 
-import qualified Data.ByteString     as B
+import           Data.Binary
+import           Data.Binary.Put
+import qualified Data.ByteString      as B
+import           Data.ByteString.Lazy (toStrict)
 import           Data.Foldable
+import           Data.Hashable
 import           Data.Monoid
 import           Data.String
 import           Data.Traversable
@@ -30,31 +34,27 @@ executeRedis action = do
                         runRedis connection action
   either (throwError . InternalError . fromString . show) return result
 
-saveHubEvent :: RedisCtx m f
-             => B.ByteString
-             -> B.ByteString
-             -> HubEvent
-             -> m (f Integer)
-saveHubEvent callback topic event =
-    rpush (B.append "events:" $ B.append callback $ B.append ":" topic) [toByteString event]
+saveSubscription :: RedisCtx m f => Subscription -> m (f Integer)
+saveSubscription sub =
+    rpush (B.append "subscription:" (toStrict $ runPut $ put $ hash sub)) [toByteString sub]
 
-loadEvents :: RedisCtx m f
-           => B.ByteString
-           -> B.ByteString
-           -> m (f [B.ByteString])
-loadEvents callback topic =
-    lrange (B.append "events:" $ B.append callback $ B.append ":" topic) 0 0
+loadSubscriptionHistory :: RedisCtx m f
+                        => B.ByteString
+                        -> B.ByteString
+                        -> m (f [B.ByteString])
+loadSubscriptionHistory callback topic =
+    lrange (B.append "subscription:" $ toStrict $ runPut $ put $ hash (callback, topic)) 0 0
 
 pushPublishEvent :: RedisCtx m f
                  => B.ByteString
                  -> HubEvent
                  -> m (f Integer)
-pushPublishEvent url e = rpush (B.append "publish:events:" url) [toByteString e]
+pushPublishEvent url e = error "todo" -- rpush (B.append "publish:events:" url) [toByteString e]
 
-pushAsyncSubRequest :: RedisCtx m f => HubRequest -> m (f Integer)
+pushAsyncSubRequest :: RedisCtx m f => SubParams -> m (f Integer)
 pushAsyncSubRequest = rpush "subscription:queue" . return . toByteString
 
-popAsyncSubRequest :: (RedisCtx m f, Applicative m, Traversable f) => m (f (Maybe HubRequest))
+popAsyncSubRequest :: (RedisCtx m f, Applicative m, Traversable f) => m (f (Maybe SubParams))
 popAsyncSubRequest = lpop "subscription:request" >>= (traverse (traverse fromByteString))
 
 pushPublishQueue :: RedisCtx m f => B.ByteString -> m (f Integer)

@@ -1,14 +1,16 @@
-{-# LANGUAGE FlexibleContexts      #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE OverloadedStrings          #-}
 
-module Web.Deiko.Hub.Parse (parseHubRequest, validateUrl) where
+module Web.Deiko.Hub.Parse (parseSubParams, validateUrl) where
 
 import           Prelude                                  hiding (log)
 
 import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Error.Class
+import           Control.Monad.RWS
 import           Data.Functor.Identity
 
 import           Web.Deiko.Hub.Types
@@ -28,78 +30,72 @@ import           Text.ParserCombinators.Parsec.Char
 import           Text.ParserCombinators.Parsec.Combinator
 import           Text.ParserCombinators.Parsec.Prim       hiding (label, (<|>))
 
-type Param = (B.ByteString, B.ByteString)
+data ReqState = RS { srsCallback     :: Maybe S.Text
+                   , srsMode         :: Maybe S.Text
+                   , srsTopic        :: Maybe S.Text
+                   , srsVerify       :: Maybe [S.Text]
+                   , srsLeaseSeconds :: Maybe Int
+                   , srsSecret       :: Maybe S.Text
+                   , srsVerifyToken  :: Maybe S.Text }
 
-data ReqState s = RS { srsCallback :: Maybe s
-                     , srsMode     :: Maybe s
-                     , srsTopic    :: Maybe s
-                     , srsVerify   :: Maybe [s]
-                     , srsOthers   :: [(s, s)] }
+newtype Chariot = Chariot { unChariot :: S.Text }
 
-newtype ParamParser s a = ParamParser { runParamParser :: ReqState s -> (a, SS.Seq s, ReqState s)  }
+newtype ParamParser a = ParamParser { runParamParser :: RWS () Chariot ReqState a }
+    deriving (Monad, MonadState ReqState, MonadWriter Chariot, Functor, Applicative)
 
-instance Functor (ParamParser s) where
-    fmap f (ParamParser k) = ParamParser (go . k)
-        where
-          go (a, log, state) = (f a, log, state)
+instance Monoid Chariot where
+    mempty  = Chariot mempty
+    mappend (Chariot l) (Chariot r) = Chariot $ S.append l $ S.append "\n" r
 
-instance Applicative (ParamParser s) where
-    pure  = return
-    (<*>) = ap
+setCallback, setMode, setTopic, setSecret, setVerifyToken, addVerifyParam, log :: S.Text -> ParamParser ()
 
-instance Monad (ParamParser s) where
-    return a = ParamParser $ \s -> (a, SS.empty, s)
+setCallback t = modify $ \s -> s{srsCallback=Just t}
 
-    ParamParser k >>= f = ParamParser (go . k)
-        where
-          go (a, l, s) = case runParamParser (f a) s of
-                             (b, l', s') -> (b, mappend l l', s')
+setMode t = modify $ \s -> s{srsMode=Just t}
 
-setCallback, setMode, setTopic, addVerifyParam, log :: IsString s => s -> ParamParser s ()
+setTopic t = modify $ \s -> s{srsTopic=Just t}
 
-setCallback t = ParamParser $ \s -> ((), mempty, s{srsCallback=Just t})
+setSecret t = modify $ \s -> s{srsSecret=Just t}
 
-setMode t = ParamParser $ \s -> ((), mempty, s{srsMode=Just t})
+setVerifyToken t = modify $ \s -> s{srsVerifyToken=Just t}
 
-setTopic t = ParamParser $ \s -> ((), mempty, s{srsTopic=Just t})
+setLeaseSeconds :: Int -> ParamParser ()
+setLeaseSeconds i = modify $ \s -> s{srsLeaseSeconds=Just i}
 
-addOptionalParam :: IsString s => (s, s) -> ParamParser s ()
-addOptionalParam param = ParamParser go
+addVerifyParam param = modify go
     where
-      go s@(RS{srsOthers=xs}) = ((), mempty, s{srsOthers=param:xs})
+      go s@(RS{srsVerify=Nothing}) = s{srsVerify=Just [param]}
+      go s@(RS{srsVerify=Just xs}) = s{srsVerify=Just $ mconcat [xs, [param]]}
 
-addVerifyParam param = ParamParser go
-    where
-      go s@(RS{srsVerify=Nothing}) = ((), mempty, s{srsVerify=Just [param]})
-      go s@(RS{srsVerify=Just xs}) = ((), mempty, s{srsVerify=Just $ mconcat [xs, [param]]})
+log = tell . Chariot
 
-log l = ParamParser $ \s -> ((), SS.singleton l, s)
-
-evalParamParser :: (IsString s, Monoid s)
-                => (s -> s -> s -> [s] -> [(s, s)] -> a -> b)
-                -> ParamParser s a
-                -> ReqState s
-                -> Either s b
+evalParamParser :: (S.Text -> S.Text -> S.Text -> [S.Text] -> Maybe Int -> Maybe S.Text -> Maybe S.Text -> a -> b)
+                -> ParamParser a
+                -> ReqState
+                -> Either S.Text b
 evalParamParser k (ParamParser p) s =
-    case p s of
-      (a, logs, (RS callback mode topic verify others))
-          | SS.null logs -> maybe (Left "mandatory paramaters are missing")  Right (k <$> callback <*> mode <*> topic <*> verify <*> pure others <*> pure a)
-          | otherwise  -> Left $ foldMap (flip mappend "\n") logs
+    case runRWS p () s of
+      (a, (RS callback mode topic verify leaseSeconds secret verifyToken), (Chariot logs))
+          | S.null logs -> maybe (Left "mandatory paramaters are missing")  Right (k <$> callback <*> mode <*> topic <*> verify <*> pure leaseSeconds <*> pure secret <*> pure verifyToken <*> pure a)
+          | otherwise  -> Left logs
 
-parseHubRequest :: MonadError HubError m => [(S.Text, S.Text)] -> m HubRequest
-parseHubRequest xs =
-    either (throwError . ParseError . T.fromChunks . return) return $ evalParamParser mkHubRequest (traverse_ go xs) init_state
+parseSubParams :: MonadError HubError m => [(S.Text, S.Text)] -> m SubParams
+parseSubParams xs =
+    either (throwError . ParseError . T.fromStrict) return $ evalParamParser mkHubRequest (traverse_ go xs) init_state
         where
-          init_state = RS Nothing Nothing Nothing Nothing []
+          init_state = RS Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
-          mkHubRequest callback mode topic verify others _ =
-              HubRequest callback mode topic verify others
+          mkHubRequest callback mode topic verify leaseSeconds secret verifyToken _ =
+              SubParams callback mode topic verify leaseSeconds secret verifyToken
 
-          go ("hub.callback", url)  = maybe (setCallback url) (log . S.append "error on hub.callback parameter") (validateUrl url)
-          go ("hub.mode", mode)     = setMode mode
-          go ("hub.topic",url)      = maybe (setTopic url) (log . S.append "error on hub.topic parameter") (validateUrl url)
-          go ("hub.verify", verify) = addVerifyParam verify
-          go param                  = addOptionalParam param
+          go ("hub.callback", url)        = maybe (setCallback url) (log . S.append "error on hub.callback parameter") (validateUrl url)
+          go ("hub.mode", mode)           = setMode mode
+          go ("hub.topic",url)            = maybe (setTopic url) (log . S.append "error on hub.topic parameter") (validateUrl url)
+          go ("hub.verify", verify)       = addVerifyParam verify
+          go ("hub.lease_seconds", lease) = maybe (return ()) setLeaseSeconds (validateLeaseSeconds lease)
+          go ("hub.secret", secret)       = setSecret secret
+          go ("hub.verify_token", token)  = setVerifyToken token
+          go param                        = return ()
 
 validateUrl :: (Stream s Identity Char, IsString s) => s -> Maybe s
 validateUrl input = either (Just . fromString . show) (const Nothing) (parse parser "" input *> pure ())
@@ -109,3 +105,10 @@ validateUrl input = either (Just . fromString . show) (const Nothing) (parse par
       string "s://" <|> string "://"
       some (alphaNum <|> oneOf "-_?/&.:") <?> "no strange symbol in a url"
       eof
+
+validateLeaseSeconds :: (Stream s Identity Char, IsString s) => s -> Maybe Int
+validateLeaseSeconds input = either (const Nothing) (Just . read) (parse parser "" input)
+    where
+      parser = do digits <- some digit
+                  eof
+                  return digits

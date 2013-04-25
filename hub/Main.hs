@@ -50,11 +50,11 @@ subscription = do
   report <- runEitherT $ process $ fmap (T.toStrict *** T.toStrict) xs
   either errorHandle status report
     where
-      process params = do request <- parseHubRequest params
-                          event   <- makeSubscription request
-                          let callback = encodeUtf8 (hubCallback request)
-                              topic    = encodeUtf8 (hubTopic request)
-                          executeRedis $ saveHubEvent callback topic event
+      process params = do request <- parseSubParams params
+                          sub     <- makeSubscription NotVerified request
+                          let callback = encodeUtf8 (subCallback request)
+                              topic    = encodeUtf8 (subTopic request)
+                          executeRedis $ saveSubscription sub
                           verifyRequest request
 
 publish :: ActionM ()
@@ -73,20 +73,20 @@ readFromRedis :: ActionM()
 readFromRedis = do
   callback <- param "hub.callback"
   report   <- runEitherT $ process callback
-  either errorHandle (text . fromString . show) (report :: Either HubError [HubEvent])
+  either errorHandle (text . fromString . show) (report :: Either HubError [Subscription])
       where
-        process callback = do bytes <- executeRedis $ loadEvents callback "http://www.google.com"
+        process callback = do bytes <- executeRedis $ loadSubscriptionHistory callback "http://www.google.com"
                               traverse fromByteString bytes
 
-makeSubscription :: (MonadIO m, Applicative m) => HubRequest -> m HubEvent
-makeSubscription req = (Subscription 1) <$> currentTime <*> pure req
+makeSubscription :: (MonadIO m, Applicative m) => SubState -> SubParams -> m Subscription
+makeSubscription state params = (Sub 1 state params) <$> currentTime
     where
       currentTime = liftIO getCurrentTime
 
 randomString :: (MonadIO m, IsString s) => m s
 randomString = return "test_challenge"
 
-asyncSubQueueLoop :: (HubRequest -> IO a) -> IO ()
+asyncSubQueueLoop :: (SubParams -> IO a) -> IO ()
 asyncSubQueueLoop handle = do result <- runEitherT $ executeRedis popAsyncSubRequest
                               either (print . show) go result
                                   where
@@ -97,8 +97,8 @@ asyncVerification = asyncSubQueueLoop ((go =<<) . runEitherT . verifyRequest)
     where
       go = either (print . show) (const $ return ())
 
-verifyRequest :: (MonadIO m, MonadError HubError m) => HubRequest -> m Status
-verifyRequest req@(HubRequest callback mode topic verify _) = go verify
+verifyRequest :: (MonadIO m, MonadError HubError m, Applicative m) => SubParams -> m Status
+verifyRequest req@(SubParams callback mode topic verify _ _ _) = go verify
     where
       go ("async":_) = executeRedis (pushAsyncSubRequest req) >> return status202
       go ("sync":_)  = do challenge <- randomString
@@ -108,7 +108,7 @@ verifyRequest req@(HubRequest callback mode topic verify _) = go verify
                                 | back == (encodeUtf8 challenge) ->
                                     do let encodedTopic    = encodeUtf8 topic
                                            encodedCallback = encodeUtf8 callback
-                                       executeRedis $ saveHubEvent encodedCallback encodedTopic Verify
+                                       (executeRedis . saveSubscription) =<< makeSubscription Verified req 
                                        withSqliteConnection $ \handle ->
                                            let unregister      = unregisterSubscription handle encodedTopic encodedCallback
                                                register        = registerSubscription handle encodedTopic encodedCallback
@@ -123,6 +123,9 @@ verifyRequest req@(HubRequest callback mode topic verify _) = go verify
                              ,S.append "hub.topic" $ S.append "=" topic
                              ,S.append "hub.challenge" $ S.append "=" challenge
                              ,"hub.lease_seconds=10"]
+
+fetchContent :: B.ByteString -> IO B.ByteString
+fetchContent = error "todo"
 
 instance Applicative ActionM where
     pure = return
