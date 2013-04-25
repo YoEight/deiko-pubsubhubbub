@@ -19,6 +19,7 @@ import           Data.Hashable
 import           Data.Monoid
 import           Data.String
 import           Data.Traversable
+import           Data.Text.Encoding         (encodeUtf8)
 
 import           Database.Redis
 import           Database.SQLite
@@ -71,29 +72,37 @@ withSqliteConnection f =
 
 unregisterSubscription :: (MonadIO m, MonadError HubError m)
                        => SQLiteHandle
-                       -> B.ByteString
-                       -> B.ByteString
+                       -> Subscription
                        -> m ()
-unregisterSubscription handle topic callback =
+unregisterSubscription handle (Sub _ _ (SubParams callback _ topic _ _ _ _) _) =
     do result <- liftIO $ execParamStatement_ handle query params
        maybe (return ()) (throwError . InternalError . fromString) result
            where
-             query  = "delete from subscriptions where topic_id = :topic_id and callback_id = :callback_id"
-             params = [(":topic_id", Blob topic)
-                      ,(":callback_id", Blob callback)]
+             query  = "delete from subscriptions where topic = :topic and callback = :callback"
+             params = [(":topic", Blob $ encodeUtf8 topic)
+                      ,(":callback", Blob $ encodeUtf8 callback)]
 
 registerSubscription :: (MonadIO m, MonadError HubError m)
                      => SQLiteHandle
-                     -> B.ByteString
-                     -> B.ByteString
+                     -> Subscription
                      -> m ()
-registerSubscription handle topic callback =
+registerSubscription handle (Sub _ _ (SubParams callback _ topic _ leaseSec secr _) date) =
     do result <- liftIO $ execParamStatement_ handle query params
        maybe (return ()) (throwError . InternalError . fromString) result
            where
-             query  = "insert into subscriptions (topic_id, callback_id) values (:topic_id, :callback_id)"
-             params = [(":topic_id", Blob topic)
-                      ,(":callback_id", Blob callback)]
+             query  = "insert into subscriptions (topic, callback, lease_second, secret) values (:topic, :callback, :lease, :secret)"
+             secret = maybe Null (Blob . encodeUtf8) secr
+             lease  = maybe Null (Int . fromIntegral) leaseSec
+             params = [(":topic", Blob $ encodeUtf8 topic)
+                      ,(":callback", Blob $ encodeUtf8 callback)
+                      ,(":lease", lease)
+                      ,(":secret", secret)]
+
+registerFeed :: RedisCtx m f => B.ByteString -> m (f Bool)
+registerFeed topic = setnx (B.append "known_feed:" topic) "1"
+
+knownFeed :: RedisCtx m f => B.ByteString -> m (f Bool)
+knownFeed topic = exists (B.append "known_feed:"  topic)
 
 -- What a shame this isn't in stlib
 instance Foldable (Either a) where

@@ -104,14 +104,14 @@ verifyRequest req@(SubParams callback mode topic verify _ _ _) = go verify
       go ("sync":_)  = do challenge <- randomString
                           response  <- liftIO $ (curlGetResponse_ (url $ query $ parameters challenge) [] :: IO (CurlResponse_ [(String, String)] B.ByteString))
                           case (respStatus response, respBody response) of
-                            (200, back)
-                                | back == (encodeUtf8 challenge) ->
-                                    do let encodedTopic    = encodeUtf8 topic
-                                           encodedCallback = encodeUtf8 callback
-                                       (executeRedis . saveSubscription) =<< makeSubscription Verified req 
+                            (status, back)
+                                | 200 <= status && status < 300 && back == (encodeUtf8 challenge) ->
+                                    do let encodedTopic = encodeUtf8 topic
+                                       sub <- makeSubscription Verified req 
+                                       executeRedis $ saveSubscription sub >> registerFeed encodedTopic
                                        withSqliteConnection $ \handle ->
-                                           let unregister      = unregisterSubscription handle encodedTopic encodedCallback
-                                               register        = registerSubscription handle encodedTopic encodedCallback
+                                           let unregister      = unregisterSubscription handle sub
+                                               register        = registerSubscription handle sub
                                            in unregister >> register
                                        return status204
                             _ -> throwError VerificationFailed
