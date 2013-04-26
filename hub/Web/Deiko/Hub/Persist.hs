@@ -10,19 +10,19 @@ import           Control.Applicative
 import           Control.Monad.Error
 import           Control.Monad.Trans
 
-import           Data.Binary
+import           Data.Binary          hiding (get)
 import           Data.Binary.Put
 import qualified Data.ByteString      as B
-import           Data.ByteString.Lazy (toStrict)
+import           Data.ByteString.Lazy (fromStrict, toStrict)
 import           Data.Foldable
 import           Data.Hashable
 import           Data.Monoid
 import           Data.String
+import           Data.Text.Encoding   (encodeUtf8)
 import           Data.Traversable
-import           Data.Text.Encoding         (encodeUtf8)
 
-import           Database.Redis 
-import           Database.SQLite hiding (Status)
+import           Database.Redis       hiding (decode)
+import           Database.SQLite      hiding (Status)
 
 import           System.Directory
 
@@ -109,6 +109,9 @@ initSubscriberCounter topic = set (B.append "subs:" topic) "0"
 
 incrSubscriberCount :: RedisCtx m f => B.ByteString -> m (f Integer)
 incrSubscriberCount topic = incr (B.append "subs:" topic)
+
+subscriberCount :: (RedisCtx m f, Functor f) => B.ByteString -> m (f (Maybe Integer))
+subscriberCount topic = liftM (((decode . fromStrict) <$>) <$>) (get $ B.append "subs:" topic)
 
 -- What a shame this isn't in stlib
 instance Foldable (Either a) where

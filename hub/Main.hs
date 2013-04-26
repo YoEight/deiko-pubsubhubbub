@@ -63,10 +63,18 @@ publish = do
   maybe (persistPublishRequest url) (errorHandle . ParseError . T.fromStrict . decodeUtf8) (validateUrl url)
     where
       persistPublishRequest url = do
-            let history    = pushPublishEvent url Publish
-                queue      = pushPublishQueue url
-            result <- runEitherT $ executeRedis $ history >> queue
-            either errorHandle (const $ return ()) result
+            let history = pushPublishEvent url Publish
+                queue   = pushPublishQueue url
+                deeper (Just i)
+                    | i > 0     = EitherT (history *> queue *> (return $ Right ()))
+                    | otherwise = return ()
+                deeper _ = error "impossible situation in publish handler"
+                action  = do exist <- EitherT $ knownFeed url
+                             if exist 
+                                then (EitherT $ subscriberCount url) >>= deeper
+                                else return ()
+            result <- runEitherT $ executeRedis $ runEitherT action
+            either errorHandle return result
 
 -- testing
 readFromRedis :: ActionM()
@@ -91,7 +99,7 @@ asyncSubQueueLoop handle = do result <- runEitherT $ executeRedis popAsyncSubReq
                               either (print . show) go result
                                   where
                                     go = maybe (return ()) ((asyncSubQueueLoop handle <*) . handle)
- 
+
 asyncVerification :: IO ()
 asyncVerification = asyncSubQueueLoop ((go =<<) . runEitherT . verifyRequest)
     where
@@ -107,15 +115,15 @@ verifyRequest req@(SubParams callback mode topic verify _ _ _) = go verify
                             (status, back)
                                 | 200 <= status && status < 300 && back == (encodeUtf8 challenge) ->
                                     do let encodedTopic = encodeUtf8 topic
-                                       sub <- makeSubscription Verified req 
+                                       sub <- makeSubscription Verified req
                                        executeRedis $ do saveSubscription sub
                                                          let proceed exist
-                                                                 | exist     = (const () <$>) <$> incrSubscriberCount encodedTopic 
+                                                                 | exist     = (const () <$>) <$> incrSubscriberCount encodedTopic
                                                                  | otherwise = (const () <$>) <$> registerFeed encodedTopic <* initSubscriberCounter encodedTopic
                                                          (either (return . Left) proceed) =<< knownFeed encodedTopic
                                        withSqliteConnection $ \handle ->
-                                           let unregister      = unregisterSubscription handle sub
-                                               register        = registerSubscription handle sub
+                                           let unregister = unregisterSubscription handle sub
+                                               register   = registerSubscription handle sub
                                            in unregister >> register
                                        return status204
                             _ -> throwError VerificationFailed
