@@ -108,7 +108,11 @@ verifyRequest req@(SubParams callback mode topic verify _ _ _) = go verify
                                 | 200 <= status && status < 300 && back == (encodeUtf8 challenge) ->
                                     do let encodedTopic = encodeUtf8 topic
                                        sub <- makeSubscription Verified req 
-                                       executeRedis $ saveSubscription sub >> registerFeed encodedTopic
+                                       executeRedis $ do saveSubscription sub
+                                                         let proceed exist
+                                                                 | exist     = (const () <$>) <$> incrSubscriberCount encodedTopic 
+                                                                 | otherwise = (const () <$>) <$> registerFeed encodedTopic <* initSubscriberCounter encodedTopic
+                                                         (either (return . Left) proceed) =<< knownFeed encodedTopic
                                        withSqliteConnection $ \handle ->
                                            let unregister      = unregisterSubscription handle sub
                                                register        = registerSubscription handle sub

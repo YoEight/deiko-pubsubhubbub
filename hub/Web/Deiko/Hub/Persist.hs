@@ -21,8 +21,8 @@ import           Data.String
 import           Data.Traversable
 import           Data.Text.Encoding         (encodeUtf8)
 
-import           Database.Redis
-import           Database.SQLite
+import           Database.Redis 
+import           Database.SQLite hiding (Status)
 
 import           System.Directory
 
@@ -98,11 +98,17 @@ registerSubscription handle (Sub _ _ (SubParams callback _ topic _ leaseSec secr
                       ,(":lease", lease)
                       ,(":secret", secret)]
 
-registerFeed :: RedisCtx m f => B.ByteString -> m (f Bool)
-registerFeed topic = setnx (B.append "known_feed:" topic) "1"
+registerFeed :: RedisCtx m f => B.ByteString -> m (f Status)
+registerFeed topic = set (B.append "known_feed:" topic) "1"
 
 knownFeed :: RedisCtx m f => B.ByteString -> m (f Bool)
 knownFeed topic = exists (B.append "known_feed:"  topic)
+
+initSubscriberCounter :: RedisCtx m f => B.ByteString -> m (f Status)
+initSubscriberCounter topic = set (B.append "subs:" topic) "0"
+
+incrSubscriberCount :: RedisCtx m f => B.ByteString -> m (f Integer)
+incrSubscriberCount topic = incr (B.append "subs:" topic)
 
 -- What a shame this isn't in stlib
 instance Foldable (Either a) where
