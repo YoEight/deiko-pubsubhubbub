@@ -7,7 +7,7 @@ import           Web.Deiko.Hub.Persist
 import           Web.Deiko.Hub.Types
 
 import           Control.Applicative
-import           Control.Arrow              ((***))
+import           Control.Arrow              ((&&&), (***))
 import           Control.Monad
 import           Control.Monad.Trans
 
@@ -30,7 +30,7 @@ import           Web.Scotty
 
 main = scotty 3000 $ do
          post "/hub" $ go =<< param "hub.mode"
-         get "/test" readFromRedis
+--         get "/test" readFromRedis
 
     where
       go :: B.ByteString -> ActionM ()
@@ -60,34 +60,26 @@ subscription = do
 publish :: ActionM ()
 publish = do
   url  <- param "hub.url"
-  maybe (persistPublishRequest url) (errorHandle . ParseError . T.fromStrict . decodeUtf8) (validateUrl url)
+  maybe (persistPublishRequest (T.toStrict url)) (errorHandle . ParseError) (validateUrl url)
     where
       persistPublishRequest url = do
-            let history = pushPublishEvent url Publish
-                queue   = pushPublishQueue url
-                deeper (Just i)
-                    | i > 0     = EitherT (history *> queue *> (return $ Right ()))
-                    | otherwise = return ()
-                deeper _ = error "impossible situation in publish handler"
-                action  = do exist <- EitherT $ knownFeed url
-                             if exist 
-                                then (EitherT $ subscriberCount url) >>= deeper
-                                else return ()
-            result <- runEitherT $ executeRedis $ runEitherT action
+            let persist (Just pub) = mapRedis (const ()) (pushPublishEvent pub *> pushPublishQueue pub)
+                persist _          = returnRedis ()
+            result <- runEitherT $ executeRedis $ bindRedis persist (validatePublishRequest url)
             either errorHandle return result
 
 -- testing
-readFromRedis :: ActionM()
-readFromRedis = do
-  callback <- param "hub.callback"
-  report   <- runEitherT $ process callback
-  either errorHandle (text . fromString . show) (report :: Either HubError [Subscription])
-      where
-        process callback = do bytes <- executeRedis $ loadSubscriptionHistory callback "http://www.google.com"
-                              traverse fromByteString bytes
+-- readFromRedis :: ActionM()
+-- readFromRedis = do
+--   callback <- param "hub.callback"
+--   report   <- runEitherT $ process callback
+--   either errorHandle (text . fromString . show) (report :: Either HubError [Subscription])
+--       where
+--         process callback = do bytes <- executeRedis $ loadSubscriptionHistory callback "http://www.google.com"
+--                               traverse fromByteString bytes
 
-makeSubscription :: (MonadIO m, Applicative m) => SubState -> SubParams -> m Subscription
-makeSubscription state params = (Sub 1 state params) <$> currentTime
+makeSubscription :: (MonadIO m, Applicative m, Verification v) => v -> SubParams -> m (Sub v)
+makeSubscription v params = ((Sub v) . (SubInfos 1 params)) <$> currentTime
     where
       currentTime = liftIO getCurrentTime
 
@@ -118,13 +110,13 @@ verifyRequest req@(SubParams callback mode topic verify _ _ _) = go verify
                                        sub <- makeSubscription Verified req
                                        executeRedis $ do saveSubscription sub
                                                          let proceed exist
-                                                                 | exist     = (const () <$>) <$> incrSubscriberCount encodedTopic
-                                                                 | otherwise = (const () <$>) <$> registerFeed encodedTopic <* initSubscriberCounter encodedTopic
-                                                         (either (return . Left) proceed) =<< knownFeed encodedTopic
-                                       withSqliteConnection $ \handle ->
-                                           let unregister = unregisterSubscription handle sub
-                                               register   = registerSubscription handle sub
-                                           in unregister >> register
+                                                                 | exist     = const () <$> (EitherT $ incrSubscriberCount encodedTopic)
+                                                                 | otherwise = const () <$> (EitherT $ registerFeed encodedTopic <* initSubscriberCounter encodedTopic)
+                                                         runEitherT (proceed =<< (EitherT $ knownFeed encodedTopic))
+                                       -- withSqliteConnection $ \handle ->
+                                       --     let unregister = unregisterSubscription handle sub
+                                       --         register   = registerSubscription handle sub
+                                       --     in unregister >> register
                                        return status204
                             _ -> throwError VerificationFailed
       go (_:xs)      = go xs

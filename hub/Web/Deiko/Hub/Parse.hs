@@ -26,6 +26,7 @@ import qualified Data.Text.Lazy                           as T
 import           Text.Parsec.ByteString
 import           Text.Parsec.Prim                         hiding ((<|>))
 import           Text.Parsec.Text
+import           Text.Parsec.Text.Lazy
 import           Text.ParserCombinators.Parsec.Char
 import           Text.ParserCombinators.Parsec.Combinator
 import           Text.ParserCombinators.Parsec.Prim       hiding (label, (<|>))

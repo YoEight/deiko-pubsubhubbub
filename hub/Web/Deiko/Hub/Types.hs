@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE GADTs                #-}
 {-# LANGUAGE OverloadedStrings    #-}
 {-# LANGUAGE UndecidableInstances #-}
 
@@ -17,14 +18,20 @@ import qualified Data.ByteString.Lazy as BL
 import           Data.Foldable        (foldMap)
 import           Data.Hashable
 import           Data.Int
+import           Data.Monoid
 import qualified Data.Text            as S
 import           Data.Text.Encoding   (encodeUtf8)
 import qualified Data.Text.Lazy       as T
 import           Data.Time.Clock
 
-data SubState = Verified
-              | NotVerified
-              | Delete deriving Show
+data Verified = Verified deriving Show
+data NotVerified = NotVerified deriving Show
+
+data Deletion a where
+    Deletion :: Verification v => v -> Deletion v
+
+data Submitted = Submitted deriving Show
+data Fetched = Fetched deriving Show
 
 data SubParams = SubParams { subCallback     :: S.Text
                            , subMode         :: S.Text
@@ -34,18 +41,42 @@ data SubParams = SubParams { subCallback     :: S.Text
                            , subSecret       :: Maybe S.Text
                            , subVerifyToken  :: Maybe S.Text } deriving Show
 
-data Subscription = Sub { subVersion :: Int
-                        , subState   :: SubState
-                        , subParams  :: SubParams
-                        , subDate    :: UTCTime } deriving Show
+data SubInfos = SubInfos { subVersion :: Int
+                         , subParams  :: SubParams
+                         , subDate    :: UTCTime } deriving Show
 
-data HubEvent = Publish
-              | Verify deriving Show
+data Sub a where
+    Sub :: Verification v => v -> SubInfos -> Sub v
+
+data Pub a where
+    Pub :: Publishing p => p -> S.Text -> Pub p
 
 data HubError = BadRequest T.Text
               | VerificationFailed
               | ParseError T.Text
               | InternalError T.Text deriving (Eq, Show)
+
+instance Show a => Show (Sub a) where
+    show (Sub state infos) = mconcat ["Sub ", show state, show infos]
+
+instance Show a => Show (Pub a) where
+    show (Pub state url) = mconcat ["Pub ", show state, show url]
+
+class Verification a
+class Publishing a
+
+instance Verification Verified
+instance Verification NotVerified
+instance Verification v => Verification (Deletion v)
+
+instance Publishing Submitted
+instance Publishing Fetched
+
+class ToValue a where
+    toValue :: a -> Value
+
+class FromValue a where
+    fromValue :: Monad m => Value -> m a
 
 class ToBson a where
     toBson :: a -> Document
@@ -75,22 +106,44 @@ instance ToBson SubParams where
               sec    = foldMap (\s -> ["hub.secret" =: s]) secret
               tok    = foldMap (\t -> ["hub.verify_token" =: t]) verifyToken
 
-instance ToBson Subscription where
-    toBson (Sub version state params date) =
-         ["state"   =: stateValue state
+instance ToValue a => ToBson (Sub a) where
+    toBson (Sub state (SubInfos version params date)) =
+         ["state"   := toValue state
          ,"version" =: version
          ,"date"    =: date
          ,"params"  =: toBson params]
-        where
-          stateValue :: SubState -> S.Text
-          stateValue Verified    = "verified"
-          stateValue NotVerified = "not_verified"
-          stateValue Delete      = "delete"
 
-instance Hashable Subscription where
-    hashWithSalt salt sub =
-        let callback = subCallback $ subParams $ sub
-            topic    = subTopic $ subParams $ sub
+instance ToValue Verified where
+    toValue _ = String "verified"
+
+instance ToValue NotVerified where
+    toValue _ = String "not_verified"
+
+instance ToValue a => ToValue (Deletion a) where
+    toValue (Deletion a) = go (toValue a)
+        where
+          go (String s) = String $ S.append "delete_" s
+
+instance FromValue Verified where
+    fromValue (String "verified") = return Verified
+    fromValue _ = fail "can't produce a Verified"
+
+instance FromValue NotVerified where
+    fromValue (String "not_verified") = return NotVerified
+    fromValue _ = fail "can't produce a NotVerified"
+
+instance (FromValue v, Verification v) => FromValue (Deletion v) where
+    fromValue (String x) =
+        maybe deletionFailure (liftM Deletion . fromValue . String) (S.stripPrefix "delete_" x)
+    fromValue _ = deletionFailure
+
+deletionFailure :: Monad m => m a
+deletionFailure = fail "can't produce a Deletion"
+
+instance Hashable (Sub a) where
+    hashWithSalt salt (Sub _ infos) =
+        let callback = subCallback $ subParams $ infos
+            topic    = subTopic $ subParams $ infos
         in hashWithSalt salt (callback, topic)
 
 instance FromBson a => FromByteString a where
@@ -111,17 +164,10 @@ instance FromBson SubParams where
             secret = lookup "hub.secret"
             verifyToken = lookup "hub.verify_token"
 
-instance FromBson Subscription where
-    fromBson doc = do state   <- getState doc
+instance (FromValue v, Verification v) => FromBson (Sub v) where
+    fromBson doc = do state   <- look "state" doc >>= fromValue
                       version <- lookup "version" doc
                       date    <- lookup "date" doc
                       reqDoc  <- lookup "params" doc
                       params  <- fromBson reqDoc
-                      return $ Sub version state params date
-        where
-          getState = liftM go . lookup "state"
-
-          go :: S.Text -> SubState
-          go "verified"     = Verified
-          go "not_verified" = NotVerified
-          go "delete"       = Delete
+                      return $ Sub state (SubInfos version params date)
