@@ -107,16 +107,16 @@ verifyRequest req@(SubParams callback mode topic verify _ _ _) = go verify
                             (status, back)
                                 | 200 <= status && status < 300 && back == (encodeUtf8 challenge) ->
                                     do let encodedTopic = encodeUtf8 topic
+                                           proceed exist
+                                               | exist     = mapRedis (const ()) (incrSubscriberCount encodedTopic)
+                                               | otherwise = mapRedis (const ()) (registerFeed encodedTopic <* initSubscriberCounter encodedTopic)
+                                           action sub = saveSubscription sub >> bindRedis proceed (knownFeed encodedTopic)
                                        sub <- makeSubscription Verified req
-                                       executeRedis $ do saveSubscription sub
-                                                         let proceed exist
-                                                                 | exist     = const () <$> (EitherT $ incrSubscriberCount encodedTopic)
-                                                                 | otherwise = const () <$> (EitherT $ registerFeed encodedTopic <* initSubscriberCounter encodedTopic)
-                                                         runEitherT (proceed =<< (EitherT $ knownFeed encodedTopic))
-                                       -- withSqliteConnection $ \handle ->
-                                       --     let unregister = unregisterSubscription handle sub
-                                       --         register   = registerSubscription handle sub
-                                       --     in unregister >> register
+                                       executeRedis $ action sub
+                                       withSqliteConnection $ \handle ->
+                                           let unregister = unregisterSubscription handle sub
+                                               register   = registerSubscription handle sub
+                                           in unregister >> register
                                        return status204
                             _ -> throwError VerificationFailed
       go (_:xs)      = go xs
