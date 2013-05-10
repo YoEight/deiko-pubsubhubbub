@@ -69,9 +69,9 @@ withSqliteConnection f =
        liftIO $ closeConnection handle
        return a
 
-unregisterSubscription :: (MonadIO m, MonadError HubError m, Verification v)
+unregisterSubscription :: (MonadIO m, MonadError HubError m)
                        => SQLiteHandle
-                       -> Sub v
+                       -> Sub Verified
                        -> m ()
 unregisterSubscription handle (Sub _ (SubInfos _ (SubParams callback _ topic _ _ _ _) _)) =
     do result <- liftIO $ execParamStatement_ handle query params
