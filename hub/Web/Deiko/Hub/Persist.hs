@@ -4,27 +4,28 @@
 
 module Web.Deiko.Hub.Persist where
 
-import           Web.Deiko.Hub.Parse  (validateUrl)
+import           Web.Deiko.Hub.Parse   (validateUrl)
 import           Web.Deiko.Hub.Types
 
 import           Control.Applicative
 import           Control.Monad.Error
 import           Control.Monad.Trans
 
-import           Data.Binary          hiding (get)
+import           Data.Binary           hiding (get)
 import           Data.Binary.Put
-import qualified Data.ByteString      as B
-import           Data.ByteString.Lazy (fromStrict, toStrict)
+import qualified Data.ByteString       as B
+import           Data.ByteString.Lazy  (fromStrict, toStrict)
 import           Data.Foldable
+import           Data.Functor.Identity (Identity (..))
 import           Data.Hashable
 import           Data.Monoid
 import           Data.String
-import qualified Data.Text            as S
-import           Data.Text.Encoding   (encodeUtf8)
+import qualified Data.Text             as S
+import           Data.Text.Encoding    (encodeUtf8)
 import           Data.Traversable
 
-import           Database.Redis       hiding (decode)
-import           Database.SQLite      hiding (Status)
+import           Database.Redis        hiding (decode)
+import           Database.SQLite       hiding (Status)
 
 import           System.Directory
 
@@ -59,13 +60,22 @@ pushPublishEvent :: RedisCtx m f => Pub Submitted -> m (f Integer)
 pushPublishEvent pub = error "todo"
 -- rpush (B.append "publish:events:" url) [toByteString e]
 
-pushAsyncSubRequest :: RedisCtx m f => Sub NotVerified -> m (f Integer)
-pushAsyncSubRequest = 
+pushAsyncSubRequest :: (Pending v, RedisCtx m f)
+                    => Sub v
+                    -> m (f Integer)
+pushAsyncSubRequest =
   rpush "sub:queue" . return . toByteString . subParams . subInfos
 
+type BothPending = Either (Sub NotVerified) (Sub (Deletion NotVerified))
+
 popAsyncSubRequest :: (RedisCtx m f, Applicative m, Traversable f)
-                   => m (f (Maybe SubParams))
-popAsyncSubRequest = lpop "sub:request" >>= (traverse (traverse fromByteString))
+                   => m (f (Maybe BothPending))
+popAsyncSubRequest = lpop "sub:request" >>= (traverse (traverse go))
+  where
+    go bytes =
+      let sub   = fromByteString bytes
+          unsub = runIdentity $ fromByteString bytes
+      in pure $ maybe (Right unsub) Left sub
 
 pushPublishQueue :: RedisCtx m f => Pub Submitted -> m (f Integer)
 pushPublishQueue (Pub _ url) = rpush "publish:queue" [encodeUtf8 url]
@@ -80,11 +90,11 @@ withSqliteConnection f =
      liftIO $ closeConnection handle
      return a
 
-unregisterSubscription :: (MonadIO m, MonadError HubError m)
-                       => SQLiteHandle
-                       -> Sub Verified
-                       -> m ()
-unregisterSubscription handle sub =
+unregisterSub :: (MonadIO m, MonadError HubError m, Ended v w)
+              => Sub w
+              -> SQLiteHandle
+              -> m ()
+unregisterSub sub handle =
   do result <- liftIO $ execParamStatement_ handle
                deleteSubQuery $
                deleteSubParams (subParams $ subInfos sub)
@@ -99,11 +109,11 @@ deleteSubParams (SubParams cb _ topic _ _ _ _) =
   [(":topic", Blob $ encodeUtf8 topic)
   ,(":callback", Blob $ encodeUtf8 cb)]
 
-registerSubscription :: (MonadIO m, MonadError HubError m)
-                     => SQLiteHandle
-                     -> Sub Verified
-                     -> m ()
-registerSubscription handle sub =
+registerSub :: (MonadIO m, MonadError HubError m, Ended v w)
+            => Sub w
+            -> SQLiteHandle
+            -> m ()
+registerSub sub handle =
   do result <- liftIO $ execParamStatement_ handle
                registerSubQuery $
                registerSubParams $ subParams $ subInfos sub

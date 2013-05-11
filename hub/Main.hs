@@ -94,39 +94,51 @@ makeSub :: (MonadIO m, Applicative m, Verification v)
         -> SubParams
         -> m (Sub v)
 makeSub v params = ((Sub v) . (SubInfos 1 params)) <$> currentTime
-    where
-      currentTime = liftIO getCurrentTime
+  where
+    currentTime = liftIO getCurrentTime
 
 randomString :: (MonadIO m, IsString s) => m s
 randomString = return "test_challenge"
 
--- asyncSubQueueLoop :: (SubParams -> IO a) -> IO ()
--- asyncSubQueueLoop handle = do result <- runEitherT $ executeRedis popAsyncSubRequest
---                               either (print . show) go result
---                                   where
---                                     go = maybe (return ()) ((asyncSubQueueLoop handle <*) . handle)
+asyncSubQueueLoop :: (Sub Verified -> IO a)
+                  -> (Sub (Deletion Verified) -> IO b)
+                  -> IO ()
+asyncSubQueueLoop fsub usub =
+  let verifying f e =
+        do (_, res) <- verify e
+           maybe unit ((unit <*) . f) res
 
--- asyncVerification :: IO ()
--- asyncVerification = asyncSubQueueLoop ((go =<<) . runEitherT . verifyRequest)
---     where
---       go = either (print . show) (const $ return ())
+      unit       = return ()
+      onSubscr   = verifying fsub
+      onDeletion = verifying usub
+      onSuccess  = maybe unit (either onSubscr onDeletion)
+      logError   = print . show
+  in (runEitherT $ executeRedis popAsyncSubRequest) >>=
+       ((asyncSubQueueLoop fsub usub <*) . either logError onSuccess)
 
-verification :: (MonadIO m, MonadError HubError m, Applicative m)
-              => Sub NotVerified
-              -> m (Status, Maybe (Sub Verified))
+asyncVerification :: IO ()
+asyncVerification =
+  asyncSubQueueLoop
+  (runEitherT . updateSubFigures)
+  (runEitherT . withSqliteConnection . unregisterSub)
+
+verification :: (MonadIO m, MonadError HubError m, Applicative m
+                , Pending v, Ended v w, Verification w)
+             => Sub v
+             -> m (Status, Maybe (Sub w))
 verification sub = go $ subVerify $ subParams $ subInfos sub
-    where
-      go ("async":_) = executeRedis (pushAsyncSubRequest sub) >>
-                       return (status202, Nothing)
-      go ("sync":_)  = verify sub
-      go (_:xs)      = go xs
-      go []          = throwError $ BadRequest "Unsupported verification mode"
+  where
+    go ("async":_) = executeRedis (pushAsyncSubRequest sub) >>
+                     return (status202, Nothing)
+    go ("sync":_)  = verify sub
+    go (_:xs)      = go xs
+    go []          = throwError $ BadRequest "Unsupported verification mode"
 
 type CurlResp = IO (CurlResponse_ [(String, String)] B.ByteString)
 
-verify :: (MonadIO m, MonadError HubError m, Applicative m)
-       => Sub NotVerified
-       -> m (Status, Maybe (Sub Verified))
+verify :: (MonadIO m, Applicative m, Pending v, Ended v w, Verification w)
+       => Sub v
+       -> m (Status, Maybe (Sub w))
 verify = go . subParams . subInfos
   where
     go params = do
@@ -137,8 +149,8 @@ verify = go . subParams . subInfos
       case (respStatus response, respBody response) of
         (status, back)
           | 200 <= status && status < 300 && back == encChallenge ->
-            fmap ((status204,) . Just) (makeSub Verified params)
-        _ -> throwError VerificationFailed
+            fmap ((status204,) . Just) (makeSub end params)
+        _ -> return (status400, Nothing)
 
     curl :: String -> CurlResp
     curl = flip curlGetResponse_ $ []
@@ -154,19 +166,19 @@ subParamsQuery (SubParams callback mode topic verify _ _ _) challenge =
 
 updateSubFigures :: (MonadIO m, MonadError HubError m) => Sub Verified -> m ()
 updateSubFigures sub@(Sub _ (SubInfos _ params _)) =
-    let encodedTopic = encodeUtf8 $ subTopic params
-        incr = unitRedis (incrSubscriberCount encodedTopic)
-        init = unitRedis
-               (registerFeed encodedTopic <* initSubscriberCounter encodedTopic)
-        proceed exist
-            | exist     = incr
-            | otherwise = init
-        action sub = saveSubscription sub >>
-                     bindRedis proceed (knownFeed encodedTopic)
-        registration handle = unregisterSubscription handle sub >>
-                              registerSubscription handle sub
-    in do executeRedis $ action sub
-          withSqliteConnection registration
+  let encodedTopic = encodeUtf8 $ subTopic params
+      incr = unitRedis (incrSubscriberCount encodedTopic)
+      init = unitRedis
+             (registerFeed encodedTopic <* initSubscriberCounter encodedTopic)
+      proceed exist
+        | exist     = incr
+        | otherwise = init
+      action sub = saveSubscription sub >>
+                   bindRedis proceed (knownFeed encodedTopic)
+      registration handle = unregisterSub sub handle >>
+                            registerSub sub handle
+  in do executeRedis $ action sub
+        withSqliteConnection registration
 
 fetchContent :: B.ByteString -> IO B.ByteString
 fetchContent = error "todo"

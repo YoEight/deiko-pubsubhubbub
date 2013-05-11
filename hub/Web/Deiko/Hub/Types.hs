@@ -1,7 +1,9 @@
-{-# LANGUAGE FlexibleInstances    #-}
-{-# LANGUAGE GADTs                #-}
-{-# LANGUAGE OverloadedStrings    #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE FlexibleInstances      #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTs                  #-}
+{-# LANGUAGE MultiParamTypeClasses  #-}
+{-# LANGUAGE OverloadedStrings      #-}
+{-# LANGUAGE UndecidableInstances   #-}
 
 module Web.Deiko.Hub.Types where
 
@@ -64,6 +66,9 @@ instance Show a => Show (Pub a) where
 
 class Verification a
 class Publishing a
+class Pending a
+class Ended a b | b -> a where
+  end :: b
 
 instance Verification Verified
 instance Verification NotVerified
@@ -71,6 +76,15 @@ instance Verification v => Verification (Deletion v)
 
 instance Publishing Submitted
 instance Publishing Fetched
+
+instance Pending NotVerified
+instance Pending v => Pending (Deletion v)
+
+instance Ended NotVerified Verified where
+  end = Verified
+
+instance (Ended a b, Verification b) => Ended (Deletion a) (Deletion b) where
+  end = Deletion end
 
 class ToValue a where
     toValue :: a -> Value
