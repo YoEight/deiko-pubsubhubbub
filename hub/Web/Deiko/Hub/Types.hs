@@ -94,24 +94,24 @@ instance ToBson a => ToByteString a where
     toByteString = BL.toStrict . runPut . putDocument . toBson
 
 instance ToBson SubParams where
-    toBson (SubParams callback mode topic verify leaseSeconds secret verifyToken) =
+    toBson (SubParams cb mode topic verify leaseSeconds secret verifyToken) =
         merge base $ merge lease $ merge sec tok
-            where
-              base = ["hub.callback" =: callback
-                     ,"hub.mode"     =: mode
-                     ,"hub.topic"    =: topic
-                     ,"hub.verify"   =: verify]
+          where
+            base = ["hub.callback" =: cb
+                   ,"hub.mode"     =: mode
+                   ,"hub.topic"    =: topic
+                   ,"hub.verify"   =: verify]
 
-              lease  = foldMap (\i -> ["hub.lease_seconds" =: i]) leaseSeconds
-              sec    = foldMap (\s -> ["hub.secret" =: s]) secret
-              tok    = foldMap (\t -> ["hub.verify_token" =: t]) verifyToken
+            lease  = foldMap (\i -> ["hub.lease_seconds" =: i]) leaseSeconds
+            sec    = foldMap (\s -> ["hub.secret" =: s]) secret
+            tok    = foldMap (\t -> ["hub.verify_token" =: t]) verifyToken
 
 instance ToValue a => ToBson (Sub a) where
     toBson (Sub state (SubInfos version params date)) =
-         ["state"   := toValue state
-         ,"version" =: version
-         ,"date"    =: date
-         ,"params"  =: toBson params]
+      ["state"   := toValue state
+      ,"version" =: version
+      ,"date"    =: date
+      ,"params"  =: toBson params]
 
 instance ToValue Verified where
     toValue _ = String "verified"
@@ -121,8 +121,8 @@ instance ToValue NotVerified where
 
 instance ToValue a => ToValue (Deletion a) where
     toValue (Deletion a) = go (toValue a)
-        where
-          go (String s) = String $ S.append "delete_" s
+      where
+        go (String s) = String $ S.append "delete_" s
 
 instance FromValue Verified where
     fromValue (String "verified") = return Verified
@@ -134,7 +134,8 @@ instance FromValue NotVerified where
 
 instance (FromValue v, Verification v) => FromValue (Deletion v) where
     fromValue (String x) =
-        maybe deletionFailure (liftM Deletion . fromValue . String) (S.stripPrefix "delete_" x)
+        maybe deletionFailure (liftM Deletion . fromValue . String)
+                (S.stripPrefix "delete_" x)
     fromValue _ = deletionFailure
 
 deletionFailure :: Monad m => m a
@@ -155,19 +156,24 @@ instance FromBson SubParams where
       mode     <- lookup "hub.mode" doc
       topic    <- lookup "hub.topic" doc
       verify   <- lookup "hub.verify" doc
-      return $ SubParams callback mode topic verify (leaseSeconds doc) (secret doc) (verifyToken doc)
-          where
-            leaseSeconds :: Document -> Maybe Int
-            leaseSeconds = lookup "hub.lease_seconds"
+      return $ SubParams  callback mode topic verify (leaseSeconds doc)
+                 (secret doc) (verifyToken doc)
+        where
+          leaseSeconds :: Document -> Maybe Int
+          leaseSeconds = lookup "hub.lease_seconds"
 
-            secret, verifyToken :: Document -> Maybe S.Text
-            secret = lookup "hub.secret"
-            verifyToken = lookup "hub.verify_token"
+          secret, verifyToken :: Document -> Maybe S.Text
+          secret = lookup "hub.secret"
+          verifyToken = lookup "hub.verify_token"
 
 instance (FromValue v, Verification v) => FromBson (Sub v) where
-    fromBson doc = do state   <- look "state" doc >>= fromValue
-                      version <- lookup "version" doc
-                      date    <- lookup "date" doc
-                      reqDoc  <- lookup "params" doc
-                      params  <- fromBson reqDoc
-                      return $ Sub state (SubInfos version params date)
+    fromBson doc =
+      do state   <- look "state" doc >>= fromValue
+         version <- lookup "version" doc
+         date    <- lookup "date" doc
+         reqDoc  <- lookup "params" doc
+         params  <- fromBson reqDoc
+         return $ Sub state (SubInfos version params date)
+
+subInfos :: Sub v -> SubInfos
+subInfos (Sub _ infos) = infos

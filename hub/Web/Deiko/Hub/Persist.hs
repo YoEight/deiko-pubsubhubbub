@@ -31,30 +31,40 @@ import           System.Directory
 sqliteDbName :: String
 sqliteDbName = "/hub.db"
 
-executeRedis :: (MonadIO m, MonadError HubError m) => Redis (Either Reply a) -> m a
+executeRedis :: (MonadIO m, MonadError HubError m)
+             => Redis (Either Reply a)
+             -> m a
 executeRedis action = do
-  result <- liftIO $ do connection <- connect defaultConnectInfo
-                        runRedis connection action
+  result <- liftIO $
+            connect defaultConnectInfo >>=
+                        (flip runRedis $ action)
   either (throwError . InternalError . fromString . show) return result
 
-saveSubscription :: (Verification v, ToValue v, RedisCtx m f) => Sub v -> m (f Integer)
+saveSubscription :: (Verification v, ToValue v, RedisCtx m f)
+                 => Sub v
+                 -> m (f Integer)
 saveSubscription sub =
-    rpush (B.append "sub:" (toStrict $ runPut $ put $ hash sub)) [toByteString sub]
+    rpush (B.append "sub:" (toStrict $ runPut $ put $ hash sub))
+            [toByteString sub]
 
 loadSubscriptionHistory :: RedisCtx m f
                         => B.ByteString
                         -> B.ByteString
                         -> m (f [B.ByteString])
 loadSubscriptionHistory callback topic =
-    lrange (B.append "sub:" $ toStrict $ runPut $ put $ hash (callback, topic)) 0 0
+  let key = (B.append "sub:" $ toStrict $ runPut $ put $ hash (callback, topic))
+  in lrange key 0 0
 
 pushPublishEvent :: RedisCtx m f => Pub Submitted -> m (f Integer)
-pushPublishEvent pub = error "todo" -- rpush (B.append "publish:events:" url) [toByteString e]
+pushPublishEvent pub = error "todo"
+-- rpush (B.append "publish:events:" url) [toByteString e]
 
-pushAsyncSubRequest :: RedisCtx m f => SubParams -> m (f Integer)
-pushAsyncSubRequest = rpush "sub:queue" . return . toByteString
+pushAsyncSubRequest :: RedisCtx m f => Sub NotVerified -> m (f Integer)
+pushAsyncSubRequest = 
+  rpush "sub:queue" . return . toByteString . subParams . subInfos
 
-popAsyncSubRequest :: (RedisCtx m f, Applicative m, Traversable f) => m (f (Maybe SubParams))
+popAsyncSubRequest :: (RedisCtx m f, Applicative m, Traversable f)
+                   => m (f (Maybe SubParams))
 popAsyncSubRequest = lpop "sub:request" >>= (traverse (traverse fromByteString))
 
 pushPublishQueue :: RedisCtx m f => Pub Submitted -> m (f Integer)
@@ -64,38 +74,56 @@ withSqliteConnection :: (MonadIO m, MonadError HubError m)
                      => (SQLiteHandle -> m a)
                      -> m a
 withSqliteConnection f =
-    do handle <- liftIO $ getCurrentDirectory >>= \dir -> openConnection (dir ++ sqliteDbName)
-       a      <- f handle
-       liftIO $ closeConnection handle
-       return a
+  do handle <- liftIO $ getCurrentDirectory >>=
+               \dir -> openConnection (dir ++ sqliteDbName)
+     a      <- f handle
+     liftIO $ closeConnection handle
+     return a
 
 unregisterSubscription :: (MonadIO m, MonadError HubError m)
                        => SQLiteHandle
                        -> Sub Verified
                        -> m ()
-unregisterSubscription handle (Sub _ (SubInfos _ (SubParams callback _ topic _ _ _ _) _)) =
-    do result <- liftIO $ execParamStatement_ handle query params
-       maybe (return ()) (throwError . InternalError . fromString) result
-           where
-             query  = "delete from subscriptions where topic = :topic and callback = :callback"
-             params = [(":topic", Blob $ encodeUtf8 topic)
-                      ,(":callback", Blob $ encodeUtf8 callback)]
+unregisterSubscription handle sub =
+  do result <- liftIO $ execParamStatement_ handle
+               deleteSubQuery $
+               deleteSubParams (subParams $ subInfos sub)
+     maybe (return ()) (throwError . InternalError . fromString) result
+
+deleteSubQuery :: String
+deleteSubQuery =
+  "delete from subscriptions where topic = :topic and callback = :callback"
+
+deleteSubParams :: SubParams -> [(String, Value)]
+deleteSubParams (SubParams cb _ topic _ _ _ _) =
+  [(":topic", Blob $ encodeUtf8 topic)
+  ,(":callback", Blob $ encodeUtf8 cb)]
 
 registerSubscription :: (MonadIO m, MonadError HubError m)
                      => SQLiteHandle
                      -> Sub Verified
                      -> m ()
-registerSubscription handle (Sub _ (SubInfos _ (SubParams callback _ topic _ leaseSec secr _) date)) =
-    do result <- liftIO $ execParamStatement_ handle query params
-       maybe (return ()) (throwError . InternalError . fromString) result
-           where
-             query  = "insert into subscriptions (topic, callback, lease_second, secret) values (:topic, :callback, :lease, :secret)"
-             secret = maybe Null (Blob . encodeUtf8) secr
-             lease  = maybe Null (Int . fromIntegral) leaseSec
-             params = [(":topic", Blob $ encodeUtf8 topic)
-                      ,(":callback", Blob $ encodeUtf8 callback)
-                      ,(":lease", lease)
-                      ,(":secret", secret)]
+registerSubscription handle sub =
+  do result <- liftIO $ execParamStatement_ handle
+               registerSubQuery $
+               registerSubParams $ subParams $ subInfos sub
+     maybe (return ()) (throwError . InternalError . fromString) result
+
+registerSubQuery :: String
+registerSubQuery =
+  "insert into subscriptions (topic, callback, lease_second, secret) values " ++
+  "(:topic, :callback, :lease, :secret)"
+
+registerSubParams :: SubParams -> [(String, Value)]
+registerSubParams (SubParams cb _ topic _ lease secr _) =
+  [(":topic", Blob $ encodeUtf8 topic)
+  ,(":callback", Blob $ encodeUtf8 cb)
+  ,(":lease", lease0)
+  ,(":secret", secret)]
+  where
+    secret = maybe Null (Blob . encodeUtf8) secr
+    lease0 = maybe Null (Int . fromIntegral) lease
+
 
 registerFeed :: RedisCtx m f => B.ByteString -> m (f Status)
 registerFeed topic = set (B.append "known_feed:" topic) "1"
@@ -109,24 +137,30 @@ initSubscriberCounter topic = set (B.append "subs:" topic) "0"
 incrSubscriberCount :: RedisCtx m f => B.ByteString -> m (f Integer)
 incrSubscriberCount topic = incr (B.append "subs:" topic)
 
-subscriberCount :: (RedisCtx m f, Functor f) => B.ByteString -> m (f (Maybe Integer))
-subscriberCount topic = liftM (((decode . fromStrict) <$>) <$>) (get $ B.append "subs:" topic)
+subscriberCount :: (RedisCtx m f, Functor f)
+                => B.ByteString
+                -> m (f (Maybe Integer))
+subscriberCount topic = liftM (((decode . fromStrict) <$>) <$>)
+                        (get $ B.append "subs:" topic)
 
 validatePublishRequest :: S.Text -> Redis (Either Reply (Maybe (Pub Submitted)))
 validatePublishRequest url = maybe checks (const nothing) (validateUrl url)
-    where
-      encodedUrl = encodeUtf8 url
+  where
+    encodedUrl = encodeUtf8 url
 
-      checks = bindRedis (\exist -> if exist then bindRedis checkCount $ subscriberCount encodedUrl else nothing) $
-               knownFeed encodedUrl
+    checks = bindRedis checkExist $ knownFeed encodedUrl
 
-      checkCount (Just count)
-          | count > 0 = just (Pub Submitted url)
-          | otherwise = nothing
-      checkCount _ = error "Impossible situation in validationPublishRequest"
+    checkExist exist
+      | exist     = bindRedis checkCount $ subscriberCount encodedUrl
+      | otherwise = nothing
 
-      nothing = returnRedis Nothing
-      just    = returnRedis . Just
+    checkCount (Just count)
+      | count > 0 = just (Pub Submitted url)
+      | otherwise = nothing
+    checkCount _ = error "Impossible situation in validationPublishRequest"
+
+    nothing = returnRedis Nothing
+    just    = returnRedis . Just
 
 returnRedis :: a -> Redis (Either Reply a)
 returnRedis = return . Right
@@ -134,8 +168,13 @@ returnRedis = return . Right
 mapRedis :: (a -> b) -> Redis (Either Reply a) -> Redis (Either Reply b)
 mapRedis f = fmap (fmap f)
 
-bindRedis :: (a -> Redis (Either Reply b)) -> Redis (Either Reply a) -> Redis (Either Reply b)
+bindRedis :: (a -> Redis (Either Reply b))
+          -> Redis (Either Reply a)
+          -> Redis (Either Reply b)
 bindRedis f m = (either (return . Left . id) f) =<< m
+
+unitRedis :: Redis (Either Reply a) -> Redis (Either Reply ())
+unitRedis = mapRedis (const ())
 
 -- What a shame this isn't in stlib
 instance Foldable (Either a) where
