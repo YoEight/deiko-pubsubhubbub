@@ -22,6 +22,7 @@ import           Data.Monoid
 import           Data.String
 import qualified Data.Text             as S
 import           Data.Text.Encoding    (encodeUtf8)
+import           Data.Time.Clock       (getCurrentTime)
 import           Data.Traversable
 
 import           Database.Redis        hiding (decode)
@@ -56,9 +57,11 @@ loadSubscriptionHistory callback topic =
   let key = (B.append "sub:" $ toStrict $ runPut $ put $ hash (callback, topic))
   in lrange key 0 0
 
-pushPublishEvent :: RedisCtx m f => Pub Submitted -> m (f Integer)
-pushPublishEvent pub = error "todo"
--- rpush (B.append "publish:events:" url) [toByteString e]
+pushPublishEvent :: (RedisCtx m f, Publishing p, ToValue p)
+                 => Pub p
+                 -> m (f Integer)
+pushPublishEvent e@(Pub _ (PubInfos url _ _)) =
+  rpush (B.append "publish:events:" (encodeUtf8 url)) [toByteString e]
 
 pushAsyncSubRequest :: (Pending v, RedisCtx m f)
                     => Sub v
@@ -78,7 +81,8 @@ popAsyncSubRequest = lpop "sub:request" >>= (traverse (traverse go))
       in pure $ maybe (Right unsub) Left sub
 
 pushPublishQueue :: RedisCtx m f => Pub Submitted -> m (f Integer)
-pushPublishQueue (Pub _ url) = rpush "publish:queue" [encodeUtf8 url]
+pushPublishQueue (Pub _ (PubInfos url _ _)) =
+  rpush "publish:queue" [encodeUtf8 url]
 
 withSqliteConnection :: (MonadIO m, MonadError HubError m)
                      => (SQLiteHandle -> m a)
@@ -165,12 +169,15 @@ validatePublishRequest url = maybe checks (const nothing) (validateUrl url)
       | otherwise = nothing
 
     checkCount (Just count)
-      | count > 0 = just (Pub Submitted url)
+      | count > 0 = just =<< makePub Submitted url
       | otherwise = nothing
     checkCount _ = error "Impossible situation in validationPublishRequest"
 
     nothing = returnRedis Nothing
     just    = returnRedis . Just
+
+makePub :: (MonadIO m, Publishing p) => p -> S.Text -> m (Pub p)
+makePub state url = liftIO $ fmap (Pub state . PubInfos url 1) getCurrentTime
 
 returnRedis :: a -> Redis (Either Reply a)
 returnRedis = return . Right

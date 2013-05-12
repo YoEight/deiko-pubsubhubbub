@@ -47,11 +47,15 @@ data SubInfos = SubInfos { subVersion :: Int
                          , subParams  :: SubParams
                          , subDate    :: UTCTime } deriving Show
 
+data PubInfos = PubInfos { pubUrl     :: S.Text
+                         , pubVersion :: Int
+                         , pubDate    :: UTCTime } deriving Show
+
 data Sub a where
     Sub :: Verification v => v -> SubInfos -> Sub v
 
 data Pub a where
-    Pub :: Publishing p => p -> S.Text -> Pub p
+    Pub :: Publishing p => p -> PubInfos -> Pub p
 
 data HubError = BadRequest T.Text
               | VerificationFailed
@@ -136,6 +140,13 @@ instance ToValue a => ToBson (Sub a) where
       ,"date"    =: date
       ,"params"  =: toBson params]
 
+instance (Publishing a, ToValue a) => ToBson (Pub a) where
+  toBson (Pub state (PubInfos url version date)) =
+    ["state"   := toValue state
+    ,"url"     =: url
+    ,"version" =: version
+    ,"date"    =: date]
+
 instance ToValue Verified where
     toValue _ = String "verified"
 
@@ -146,6 +157,12 @@ instance ToValue a => ToValue (Deletion a) where
     toValue (Deletion a) = go (toValue a)
       where
         go (String s) = String $ S.append "delete_" s
+
+instance ToValue Submitted where
+  toValue _ = String "submitted"
+
+instance ToValue Fetched where
+  toValue _ = String "fetched"
 
 instance FromValue Verified where
     fromValue (String "verified") = return Verified
@@ -160,6 +177,14 @@ instance (FromValue v, Verification v) => FromValue (Deletion v) where
         maybe deletionFailure (liftM Deletion . fromValue . String)
                 (S.stripPrefix "delete_" x)
     fromValue _ = deletionFailure
+
+instance FromValue Submitted where
+  fromValue (String "submitted") = return Submitted
+  fromValue _ = fail "can't produce a Submitted"
+
+instance FromValue Fetched where
+  fromValue (String "fetched") = return Fetched
+  fromValue _ = fail "can't produce a Fetched"
 
 deletionFailure :: Monad m => m a
 deletionFailure = fail "can't produce a Deletion"
@@ -197,6 +222,14 @@ instance (FromValue v, Verification v) => FromBson (Sub v) where
          reqDoc  <- lookup "params" doc
          params  <- fromBson reqDoc
          return $ Sub state (SubInfos version params date)
+
+instance (FromValue p, Publishing p) => FromBson (Pub p) where
+  fromBson doc =
+    do state   <- look "state" doc >>= fromValue
+       url     <- lookup "url" doc
+       version <- lookup "version" doc
+       date    <- lookup "date" doc
+       return $ Pub state $ PubInfos url version date
 
 subInfos :: Sub v -> SubInfos
 subInfos (Sub _ infos) = infos
