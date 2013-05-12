@@ -48,7 +48,8 @@ errorHandle VerificationFailed = status status400 >> text "Verification failed"
 errorHandle (ParseError e)     = status status400 >> text e
 errorHandle (InternalError e)  = status status500 >> text e >> (liftIO $ print e)
 
-subscription :: (Start v, Pending v, ToValue v, Ended v w, Verification w)
+subscription :: (Start v, Pending v, ToValue v, Ended v w, Verification v
+                , Verification w)
              => (forall m. (MonadIO m, MonadError HubError m) => Sub w -> m a)
              -> ActionM ()
 subscription whenVerified = do

@@ -70,7 +70,7 @@ class Pending a
 class Ended a b | b -> a where
   end :: b
 
-class Verification v => Start v where
+class Start v where
   start :: v
 
 instance Verification Verified
@@ -92,7 +92,7 @@ instance (Ended a b, Verification b) => Ended (Deletion a) (Deletion b) where
 instance Start NotVerified where
     start = NotVerified
 
-instance Start v => Start (Deletion v) where
+instance (Start v, Verification v) => Start (Deletion v) where
     start = Deletion start
 
 class ToValue a where
