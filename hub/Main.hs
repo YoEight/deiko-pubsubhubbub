@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE TupleSections         #-}
 
 import           Web.Deiko.Hub.Parse
@@ -33,13 +34,13 @@ import           Web.Scotty
 
 main = scotty 3000 $ do
          post "/hub" $ go =<< param "hub.mode"
---         get "/test" readFromRedis
 
     where
       go :: B.ByteString -> ActionM ()
-      go "subscribe" = subscription
-      go "publish"   = publish
-      go _           = status status404
+      go "subscribe"   = subscription updateSubFigures
+      go "unsubscribe" = subscription confirmUnsub
+      go "publish"     = publish
+      go _             = status status404
 
 errorHandle :: HubError -> ActionM ()
 errorHandle (BadRequest e)     = status status400 >> text e
@@ -47,21 +48,23 @@ errorHandle VerificationFailed = status status400 >> text "Verification failed"
 errorHandle (ParseError e)     = status status400 >> text e
 errorHandle (InternalError e)  = status status500 >> text e >> (liftIO $ print e)
 
-subscription :: ActionM ()
-subscription = do
+subscription :: (Start v, Pending v, ToValue v, Ended v w, Verification w)
+             => (forall m. (MonadIO m, MonadError HubError m) => Sub w -> m a)
+             -> ActionM ()
+subscription whenVerified = do
   xs     <- params
   report <- runEitherT $ process $ fmap (T.toStrict *** T.toStrict) xs
   either errorHandle status report
     where
       process params = do request <- parseSubParams params
-                          sub     <- makeSub NotVerified request
+                          sub     <- makeSub start request
                           let callback = encodeUtf8 (subCallback request)
                               topic    = encodeUtf8 (subTopic request)
                           executeRedis $ saveSubscription sub
                           result  <- verification sub
                           case result of
                             (status, verifiedSub) ->
-                                traverse_ updateSubFigures verifiedSub >>
+                                traverse_ whenVerified verifiedSub >>
                                           return status
 
 publish :: ActionM ()
@@ -79,16 +82,6 @@ publish = do
                       bindRedis persist (validatePublishRequest url)
             either errorHandle return result
 
--- testing
--- readFromRedis :: ActionM()
--- readFromRedis = do
---   callback <- param "hub.callback"
---   report   <- runEitherT $ process callback
---   either errorHandle (text . fromString . show) (report :: Either HubError [Subscription])
---       where
---         process callback = do bytes <- executeRedis $ loadSubscriptionHistory callback "http://www.google.com"
---                               traverse fromByteString bytes
-
 makeSub :: (MonadIO m, Applicative m, Verification v)
         => v
         -> SubParams
@@ -100,8 +93,8 @@ makeSub v params = ((Sub v) . (SubInfos 1 params)) <$> currentTime
 randomString :: (MonadIO m, IsString s) => m s
 randomString = return "test_challenge"
 
-asyncSubQueueLoop :: (Sub Verified -> IO a)
-                  -> (Sub (Deletion Verified) -> IO b)
+asyncSubQueueLoop :: (forall m. MonadIO m => Sub Verified -> m a)
+                  -> (forall m. MonadIO m => Sub (Deletion Verified) -> m b)
                   -> IO ()
 asyncSubQueueLoop fsub usub =
   let verifying f e =
@@ -120,7 +113,7 @@ asyncVerification :: IO ()
 asyncVerification =
   asyncSubQueueLoop
   (runEitherT . updateSubFigures)
-  (runEitherT . withSqliteConnection . unregisterSub)
+  (runEitherT . confirmUnsub)
 
 verification :: (MonadIO m, MonadError HubError m, Applicative m
                 , Pending v, Ended v w, Verification w)
@@ -179,6 +172,12 @@ updateSubFigures sub@(Sub _ (SubInfos _ params _)) =
                             registerSub sub handle
   in do executeRedis $ action sub
         withSqliteConnection registration
+
+confirmUnsub :: (MonadIO m, MonadError HubError m)
+             => Sub (Deletion Verified)
+             -> m ()
+confirmUnsub sub = (executeRedis $ saveSubscription sub) >>
+                   withSqliteConnection (unregisterSub sub)
 
 fetchContent :: B.ByteString -> IO B.ByteString
 fetchContent = error "todo"
