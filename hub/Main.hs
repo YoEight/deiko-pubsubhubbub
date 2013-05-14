@@ -94,6 +94,15 @@ makeSub v params = ((Sub v) . (SubInfos 1 params)) <$> currentTime
 randomString :: (MonadIO m, IsString s) => m s
 randomString = return "test_challenge"
 
+asyncPubQueueLoop :: (forall m. MonadIO m => Pub Submitted -> m a) -> IO ()
+asyncPubQueueLoop f =
+  do token <- runEitherT $ executeRedis popPubRequest
+     either (print . show)
+              (maybe (return ()) ((asyncPubQueueLoop f <*) . f)) token
+
+--fetchFeed :: Pub Submitted -> IO ()
+--fetchFeed (Pub _ (PubInfos url _ _)) =  
+
 asyncSubQueueLoop :: (forall m. MonadIO m => Sub Verified -> m a)
                   -> (forall m. MonadIO m => Sub (Deletion Verified) -> m b)
                   -> IO ()

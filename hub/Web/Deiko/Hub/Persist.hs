@@ -80,6 +80,10 @@ popAsyncSubRequest = lpop "sub:request" >>= (traverse (traverse go))
           unsub = runIdentity $ fromByteString bytes
       in pure $ maybe (Right unsub) Left sub
 
+popPubRequest :: (RedisCtx m f, Applicative m, Traversable f)
+              => m (f (Maybe (Pub Submitted)))
+popPubRequest = lpop "publish:queue" >>= (traverse (traverse fromByteString))
+
 pushPublishQueue :: RedisCtx m f => Pub Submitted -> m (f Integer)
 pushPublishQueue (Pub _ (PubInfos url _ _)) =
   rpush "publish:queue" [encodeUtf8 url]
