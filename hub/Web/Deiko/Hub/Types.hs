@@ -24,6 +24,7 @@ import           Data.Foldable        (foldMap)
 import           Data.Hashable
 import           Data.Int
 import           Data.Monoid
+import           Data.String          (IsString (..))
 import qualified Data.Text            as S
 import           Data.Text.Encoding   (encodeUtf8)
 import qualified Data.Text.Lazy       as T
@@ -80,6 +81,9 @@ class Ended a b | b -> a where
 class Start v where
   start :: v
 
+class Async a where
+  asyncKey :: IsString s => a -> s
+
 instance Verification Verified
 instance Verification NotVerified
 instance Verification v => Verification (Deletion v)
@@ -101,6 +105,12 @@ instance Start NotVerified where
 
 instance (Start v, Verification v) => Start (Deletion v) where
     start = Deletion start
+
+instance Async (Sub NotVerified) where
+  asyncKey _ = "sub"
+
+instance Async (Sub (Deletion NotVerified)) where
+  asyncKey _ = "unsub"
 
 class ToValue a where
     toValue :: a -> Value

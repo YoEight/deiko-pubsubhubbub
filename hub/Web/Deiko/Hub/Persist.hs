@@ -57,9 +57,9 @@ eventLoop onPublish onSub onDel =
   where
     go (Message channel msg) =
       case channel of
-        "publish"   -> unit $ onPublish msg
-        "async_sub" -> unit (fromByteString msg >>= (verifying onSub))
-        "async_del" -> unit (fromByteString msg >>= (verifying onDel))
+        "publish"     -> unit $ onPublish msg
+        "async_sub"   -> unit (fromByteString msg >>= (verifying onSub))
+        "async_unsub" -> unit (fromByteString msg >>= (verifying onDel))
 
     unit m = m >> return mempty
 
@@ -68,7 +68,7 @@ eventLoop onPublish onSub onDel =
 
     channels = ["publish"
                ,"async_sub"
-               ,"async_del"]
+               ,"async_unsub"]
 
 saveSubscription :: (Verification v, ToValue v, RedisCtx m f)
                  => Sub v
@@ -91,11 +91,11 @@ pushPublishEvent :: (RedisCtx m f, Publishing p, ToValue p)
 pushPublishEvent e@(Pub _ (PubInfos url _ _)) =
   rpush (B.append "publish:events:" (encodeUtf8 url)) [toByteString e]
 
-pushAsyncSubRequest :: (Pending v, RedisCtx m f)
+pushAsyncSubRequest :: (Pending v, ToValue v, Async (Sub v), RedisCtx m f)
                     => Sub v
                     -> m (f Integer)
-pushAsyncSubRequest =
-  rpush "sub:queue" . return . toByteString . subParams . subInfos
+pushAsyncSubRequest s =
+  publish (B.append "async_" (asyncKey s)) (toByteString s)
 
 type BothPending = Either (Sub NotVerified) (Sub (Deletion NotVerified))
 
