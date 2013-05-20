@@ -9,7 +9,10 @@ module Web.Deiko.Hub.Types where
 
 import           Prelude              hiding (lookup)
 
-import           Control.Monad
+import           Control.Applicative  (Applicative, (<$>))
+import           Control.Monad        (liftM)
+import           Control.Monad.Trans  (MonadIO (..))
+
 import           Data.Binary
 import           Data.Binary.Get
 import           Data.Binary.Put
@@ -233,3 +236,11 @@ instance (FromValue p, Publishing p) => FromBson (Pub p) where
 
 subInfos :: Sub v -> SubInfos
 subInfos (Sub _ infos) = infos
+
+makeSub :: (MonadIO m, Verification v)
+        => v
+        -> SubParams
+        -> m (Sub v)
+makeSub v params = liftM ((Sub v) . (SubInfos 1 params)) currentTime
+  where
+    currentTime = liftIO getCurrentTime

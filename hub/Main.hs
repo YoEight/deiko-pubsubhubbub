@@ -7,6 +7,7 @@
 import           Web.Deiko.Hub.Parse
 import           Web.Deiko.Hub.Persist
 import           Web.Deiko.Hub.Types
+import           Web.Deiko.Hub.Verification (verify)
 
 import           Control.Applicative
 import           Control.Arrow              ((&&&), (***))
@@ -27,12 +28,13 @@ import qualified Data.Text.Lazy             as T
 import           Data.Time.Clock            (getCurrentTime)
 import           Data.Traversable           (traverse)
 
-import           Network.Curl
 import           Network.HTTP.Types.Status
-
 import           Web.Scotty
 
 main = scotty 3000 $ do
+         eventLoop fetchContent
+                   (runEitherT . updateSubFigures)
+                   (runEitherT . confirmUnsub)
          post "/hub" $ go =<< param "hub.mode"
 
     where
@@ -83,48 +85,6 @@ publish = do
                       bindRedis persist (validatePublishRequest url)
             either errorHandle return result
 
-makeSub :: (MonadIO m, Applicative m, Verification v)
-        => v
-        -> SubParams
-        -> m (Sub v)
-makeSub v params = ((Sub v) . (SubInfos 1 params)) <$> currentTime
-  where
-    currentTime = liftIO getCurrentTime
-
-randomString :: (MonadIO m, IsString s) => m s
-randomString = return "test_challenge"
-
-asyncPubQueueLoop :: (forall m. MonadIO m => Pub Submitted -> m a) -> IO ()
-asyncPubQueueLoop f =
-  do token <- runEitherT $ executeRedis popPubRequest
-     either (print . show)
-              (maybe (return ()) ((asyncPubQueueLoop f <*) . f)) token
-
---fetchFeed :: Pub Submitted -> IO ()
---fetchFeed (Pub _ (PubInfos url _ _)) =  
-
-asyncSubQueueLoop :: (forall m. MonadIO m => Sub Verified -> m a)
-                  -> (forall m. MonadIO m => Sub (Deletion Verified) -> m b)
-                  -> IO ()
-asyncSubQueueLoop fsub usub =
-  let verifying f e =
-        do (_, res) <- verify e
-           maybe unit ((unit <*) . f) res
-
-      unit       = return ()
-      onSubscr   = verifying fsub
-      onDeletion = verifying usub
-      onSuccess  = maybe unit (either onSubscr onDeletion)
-      logError   = print . show
-  in (runEitherT $ executeRedis popAsyncSubRequest) >>=
-       ((asyncSubQueueLoop fsub usub <*) . either logError onSuccess)
-
-asyncVerification :: IO ()
-asyncVerification =
-  asyncSubQueueLoop
-  (runEitherT . updateSubFigures)
-  (runEitherT . confirmUnsub)
-
 verification :: (MonadIO m, MonadError HubError m, Applicative m
                 , Pending v, Ended v w, Verification w)
              => Sub v
@@ -136,36 +96,6 @@ verification sub = go $ subVerify $ subParams $ subInfos sub
     go ("sync":_)  = verify sub
     go (_:xs)      = go xs
     go []          = throwError $ BadRequest "Unsupported verification mode"
-
-type CurlResp = IO (CurlResponse_ [(String, String)] B.ByteString)
-
-verify :: (MonadIO m, Applicative m, Pending v, Ended v w, Verification w)
-       => Sub v
-       -> m (Status, Maybe (Sub w))
-verify = go . subParams . subInfos
-  where
-    go params = do
-      challenge <- randomString
-      let encChallenge = encodeUtf8 challenge
-          url          = S.unpack (subParamsQuery params challenge)
-      response  <- liftIO $ curl url
-      case (respStatus response, respBody response) of
-        (status, back)
-          | 200 <= status && status < 300 && back == encChallenge ->
-            fmap ((status204,) . Just) (makeSub end params)
-        _ -> return (status400, Nothing)
-
-    curl :: String -> CurlResp
-    curl = flip curlGetResponse_ $ []
-
-subParamsQuery :: SubParams -> S.Text -> S.Text
-subParamsQuery (SubParams callback mode topic verify _ _ _) challenge =
-  callback <> "?" <> foldl1 (\a b -> a <> "&" <> b) params
-    where
-      params = ["hub.mode=" <> mode
-               ,"hub.topic=" <> topic
-               ,"hub.challenge=" <> challenge
-               ,"hub.lease_seconds=10"]
 
 updateSubFigures :: (MonadIO m, MonadError HubError m) => Sub Verified -> m ()
 updateSubFigures sub@(Sub _ (SubInfos _ params _)) =
@@ -189,9 +119,5 @@ confirmUnsub :: (MonadIO m, MonadError HubError m)
 confirmUnsub sub = (executeRedis $ saveSubscription sub) >>
                    withSqliteConnection (unregisterSub sub)
 
-fetchContent :: B.ByteString -> IO B.ByteString
+fetchContent :: MonadIO m => B.ByteString -> m B.ByteString
 fetchContent = error "todo"
-
-instance Applicative ActionM where
-    pure = return
-    (<*>) = ap

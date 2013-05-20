@@ -1,32 +1,34 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE RankNTypes            #-}
 
 module Web.Deiko.Hub.Persist where
 
-import           Web.Deiko.Hub.Parse   (validateUrl)
+import           Web.Deiko.Hub.Parse        (validateUrl)
 import           Web.Deiko.Hub.Types
+import           Web.Deiko.Hub.Verification (verify)
 
 import           Control.Applicative
 import           Control.Monad.Error
 import           Control.Monad.Trans
 
-import           Data.Binary           hiding (get)
+import           Data.Binary                hiding (get)
 import           Data.Binary.Put
-import qualified Data.ByteString       as B
-import           Data.ByteString.Lazy  (fromStrict, toStrict)
+import qualified Data.ByteString            as B
+import           Data.ByteString.Lazy       (fromStrict, toStrict)
 import           Data.Foldable
-import           Data.Functor.Identity (Identity (..))
+import           Data.Functor.Identity      (Identity (..))
 import           Data.Hashable
-import           Data.Monoid
+import           Data.Monoid                (Monoid (..))
 import           Data.String
-import qualified Data.Text             as S
-import           Data.Text.Encoding    (encodeUtf8)
-import           Data.Time.Clock       (getCurrentTime)
+import qualified Data.Text                  as S
+import           Data.Text.Encoding         (encodeUtf8)
+import           Data.Time.Clock            (getCurrentTime)
 import           Data.Traversable
 
-import           Database.Redis        hiding (decode)
-import           Database.SQLite       hiding (Status)
+import           Database.Redis             hiding (decode)
+import           Database.SQLite            hiding (Status)
 
 import           System.Directory
 
@@ -41,6 +43,32 @@ executeRedis action = do
             connect defaultConnectInfo >>=
                         (flip runRedis $ action)
   either (throwError . InternalError . fromString . show) return result
+
+eventLoop :: MonadIO m
+          => (forall n. MonadIO n => B.ByteString -> n a)
+          -> (forall n. MonadIO n => Sub Verified -> n b)
+          -> (forall n. MonadIO n => Sub (Deletion Verified) -> n c)
+          -> m ()
+eventLoop onPublish onSub onDel =
+  liftIO $
+  connect defaultConnectInfo >>= \handle ->
+    runRedis handle $
+    pubSub (subscribe channels) go
+  where
+    go (Message channel msg) =
+      case channel of
+        "publish"   -> unit $ onPublish msg
+        "async_sub" -> unit (fromByteString msg >>= (verifying onSub))
+        "async_del" -> unit (fromByteString msg >>= (verifying onDel))
+
+    unit m = m >> return mempty
+
+    verifying f e = do (_, res) <- verify e
+                       maybe (return ()) (((return ()) <*) . f) res
+
+    channels = ["publish"
+               ,"async_sub"
+               ,"async_del"]
 
 saveSubscription :: (Verification v, ToValue v, RedisCtx m f)
                  => Sub v
@@ -86,7 +114,7 @@ popPubRequest = lpop "publish:queue" >>= (traverse (traverse fromByteString))
 
 pushPublishQueue :: RedisCtx m f => Pub Submitted -> m (f Integer)
 pushPublishQueue (Pub _ (PubInfos url _ _)) =
-  rpush "publish:queue" [encodeUtf8 url]
+  publish "publish" (encodeUtf8 url)
 
 withSqliteConnection :: (MonadIO m, MonadError HubError m)
                      => (SQLiteHandle -> m a)
