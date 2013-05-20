@@ -4,10 +4,10 @@
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE TupleSections         #-}
 
+import           Web.Deiko.Hub.Http         (fetchContent, verify)
 import           Web.Deiko.Hub.Parse
 import           Web.Deiko.Hub.Persist
 import           Web.Deiko.Hub.Types
-import           Web.Deiko.Hub.Verification (verify)
 
 import           Control.Applicative
 import           Control.Arrow              ((&&&), (***))
@@ -18,6 +18,7 @@ import           Control.Monad.Error
 import           Control.Monad.Trans.Either
 
 import qualified Data.ByteString            as B
+import           Data.ByteString.Char8      (unpack)
 import qualified Data.ByteString.Lazy       as L
 import           Data.Foldable              (traverse_)
 import           Data.Monoid                ((<>))
@@ -32,9 +33,6 @@ import           Network.HTTP.Types.Status
 import           Web.Scotty
 
 main = scotty 3000 $ do
-         eventLoop fetchContent
-                   (runEitherT . updateSubFigures)
-                   (runEitherT . confirmUnsub)
          post "/hub" $ go =<< param "hub.mode"
 
     where
@@ -43,6 +41,11 @@ main = scotty 3000 $ do
       go "unsubscribe" = subscription confirmUnsub
       go "publish"     = publish
       go _             = status status404
+
+queue :: MonadIO m => m ()
+queue = eventLoop (fetchContent . unpack)
+        (runEitherT . updateSubFigures)
+        (runEitherT . confirmUnsub)
 
 errorHandle :: HubError -> ActionM ()
 errorHandle (BadRequest e)     = status status400 >> text e
@@ -118,6 +121,3 @@ confirmUnsub :: (MonadIO m, MonadError HubError m)
              -> m ()
 confirmUnsub sub = (executeRedis $ saveSubscription sub) >>
                    withSqliteConnection (unregisterSub sub)
-
-fetchContent :: MonadIO m => B.ByteString -> m B.ByteString
-fetchContent = error "todo"

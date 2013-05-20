@@ -5,30 +5,30 @@
 
 module Web.Deiko.Hub.Persist where
 
-import           Web.Deiko.Hub.Parse        (validateUrl)
+import           Web.Deiko.Hub.Http    (verify)
+import           Web.Deiko.Hub.Parse   (validateUrl)
 import           Web.Deiko.Hub.Types
-import           Web.Deiko.Hub.Verification (verify)
 
 import           Control.Applicative
 import           Control.Monad.Error
 import           Control.Monad.Trans
 
-import           Data.Binary                hiding (get)
+import           Data.Binary           hiding (get)
 import           Data.Binary.Put
-import qualified Data.ByteString            as B
-import           Data.ByteString.Lazy       (fromStrict, toStrict)
+import qualified Data.ByteString       as B
+import           Data.ByteString.Lazy  (fromStrict, toStrict)
 import           Data.Foldable
-import           Data.Functor.Identity      (Identity (..))
+import           Data.Functor.Identity (Identity (..))
 import           Data.Hashable
-import           Data.Monoid                (Monoid (..))
+import           Data.Monoid           (Monoid (..))
 import           Data.String
-import qualified Data.Text                  as S
-import           Data.Text.Encoding         (encodeUtf8)
-import           Data.Time.Clock            (getCurrentTime)
+import qualified Data.Text             as S
+import           Data.Text.Encoding    (encodeUtf8)
+import           Data.Time.Clock       (getCurrentTime)
 import           Data.Traversable
 
-import           Database.Redis             hiding (decode)
-import           Database.SQLite            hiding (Status)
+import           Database.Redis        hiding (decode)
+import           Database.SQLite       hiding (Status)
 
 import           System.Directory
 

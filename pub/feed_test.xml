@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<atom:feed>
+  <title>Aggregated feed</title>
+  <updated>2008-08-11T02:17:44Z</updated>
+  <id>http://myhub.example.com/aggregated?1232427842-39823</id>
+
+  <entry>
+    <source>
+      <id>http://www.example.com/foo</id>
+      <link rel="self" href="http://publisher.example.com/foo.xml" />
+      <author>
+        <name>Mr. Bar</name>
+      </author>
+    </source>
+    <title>Testing Foo</title>
+    <link href="http://publisher.example.com/foo24.xml" />
+    <id>http://publisher.example.com/foo24.xml</id>
+    <updated>2008-08-11T02:15:01Z</updated>
+    <content>
+      This is some content from the user named foo.
+    </content>
+  </entry>
+
+  <entry>
+    <source>
+      <id>http://www.example.com/bar</id>
+      <link rel="self" href="http://publisher.example.com/bar.xml" />
+      <author>
+        <name>Mr. Bar</name>
+      </author>
+    </source>
+    <title>Testing Bar</title>
+    <link href="http://publisher.example.com/bar18.xml" />
+    <id>http://publisher.example.com/bar18.xml</id>
+    <updated>2008-08-11T02:17:44Z</updated>
+    <content>
+      Some data from the user named bar.
+    </content>
+  </entry>
+</atom:feed>
