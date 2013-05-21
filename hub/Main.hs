@@ -94,7 +94,7 @@ publish = do
                 persist _          = returnRedis ()
             result <- runEitherT $ executeRedis $
                       bindRedis persist (validatePublishRequest url)
-            either errorHandle return result
+            either errorHandle (const (status status204)) result
 
 verification :: (MonadIO m, MonadError HubError m, Applicative m
                 , Pending v, ToValue v, Async (Sub v), Ended v w, Verification w)
