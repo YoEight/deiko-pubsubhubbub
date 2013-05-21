@@ -16,6 +16,7 @@ import           Control.Monad.Trans
 import           Data.Binary           hiding (get)
 import           Data.Binary.Put
 import qualified Data.ByteString       as B
+import           Data.ByteString.Char8 (pack, unpack)
 import           Data.ByteString.Lazy  (fromStrict, toStrict)
 import           Data.Foldable
 import           Data.Functor.Identity (Identity (..))
@@ -24,7 +25,8 @@ import           Data.Monoid           (Monoid (..))
 import           Data.String
 import qualified Data.Text             as S
 import           Data.Text.Encoding    (encodeUtf8)
-import           Data.Time.Clock       (getCurrentTime)
+import           Data.Time.Clock       (UTCTime, getCurrentTime)
+import           Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import           Data.Traversable
 
 import           Database.Redis        hiding (decode)
@@ -32,8 +34,9 @@ import           Database.SQLite       hiding (Status)
 
 import           System.Directory
 
-import           Text.Atom.Feed        (Feed)
-import           Text.XML.Light
+import           Text.Atom.Feed        (Feed (..))
+import           Text.Atom.Feed.Export (xmlFeed)
+import           Text.XML.Light        (showElement)
 
 sqliteDbName :: String
 sqliteDbName = "/hub.db"
@@ -163,6 +166,25 @@ registerSubParams (SubParams cb _ topic _ lease secr _) =
   where
     secret = maybe Null (Blob . encodeUtf8) secr
     lease0 = maybe Null (Int . fromIntegral) lease
+
+saveFetchedFeed :: (MonadIO m, MonadError HubError m)
+                => UTCTime
+                -> Feed
+                -> (SQLiteHandle -> m ())
+saveFetchedFeed time feed =
+  sqliteExecParamStmt_ insertFeedQuery (feedParams time feed)
+
+insertFeedQuery :: String
+insertFeedQuery =
+  "insert into fetched_feeds (feed_id, fetch_date, xml) values" ++
+  "(:feed_id, :fetch_date, :xml)"
+
+feedParams :: UTCTime -> Feed -> [(String, Value)]
+feedParams time feed =
+  let content = pack $ showElement $ xmlFeed feed
+  in [(":feed_id", Text (feedId feed))
+     ,(":fetch_date", Int (round $ utcTimeToPOSIXSeconds time))
+     ,(":xml", Blob content)]
 
 registerFeed :: RedisCtx m f => B.ByteString -> m (f Status)
 registerFeed topic = set (B.append "known_feed:" topic) "1"

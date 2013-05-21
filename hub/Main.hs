@@ -42,10 +42,17 @@ main = scotty 3000 $ do
       go "publish"     = publish
       go _             = status status404
 
-queue :: MonadIO m => m ()
-queue = eventLoop (fetchContent . unpack)
-        (runEitherT . updateSubFigures)
-        (runEitherT . confirmUnsub)
+asyncQueueMain :: MonadIO m => m ()
+asyncQueueMain = eventLoop fetching
+                 (runEitherT . updateSubFigures)
+                 (runEitherT . confirmUnsub)
+  where
+    fetching bytes = 
+      do res  <- fetchContent (unpack bytes)
+         time <- liftIO getCurrentTime
+         maybe (return $ Right ()) 
+                 (runEitherT . withSqliteConnection . saveFetchedFeed time)
+                 res
 
 errorHandle :: HubError -> ActionM ()
 errorHandle (BadRequest e)     = status status400 >> text e
