@@ -4,6 +4,8 @@
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE TupleSections         #-}
 
+module Main (main, asyncQueueMain) where
+
 import           Web.Deiko.Hub.Http         (fetchContent, verify)
 import           Web.Deiko.Hub.Parse
 import           Web.Deiko.Hub.Persist
@@ -47,10 +49,10 @@ asyncQueueMain = eventLoop fetching
                  (runEitherT . updateSubFigures)
                  (runEitherT . confirmUnsub)
   where
-    fetching bytes = 
+    fetching bytes =
       do res  <- fetchContent (unpack bytes)
          time <- liftIO getCurrentTime
-         maybe (return $ Right ()) 
+         maybe (return $ Right ())
                  (runEitherT . withSqliteConnection . saveFetchedFeed time)
                  res
 
