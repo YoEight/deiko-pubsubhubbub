@@ -85,32 +85,11 @@ loadSubscriptionHistory callback topic =
   let key = (B.append "sub:" $ toStrict $ runPut $ put $ hash (callback, topic))
   in lrange key 0 0
 
-pushPublishEvent :: (RedisCtx m f, Publishing p, ToValue p)
-                 => Pub p
-                 -> m (f Integer)
-pushPublishEvent e@(Pub _ (PubInfos url _ _)) =
-  rpush (B.append "publish:events:" (encodeUtf8 url)) [toByteString e]
-
 pushAsyncSubRequest :: (Pending v, ToValue v, Async (Sub v), RedisCtx m f)
                     => Sub v
                     -> m (f Integer)
 pushAsyncSubRequest s =
   publish (B.append "async_" (asyncKey s)) (toByteString s)
-
-type BothPending = Either (Sub NotVerified) (Sub (Deletion NotVerified))
-
-popAsyncSubRequest :: (RedisCtx m f, Applicative m, Traversable f)
-                   => m (f (Maybe BothPending))
-popAsyncSubRequest = lpop "sub:request" >>= (traverse (traverse go))
-  where
-    go bytes =
-      let sub   = fromByteString bytes
-          unsub = runIdentity $ fromByteString bytes
-      in pure $ maybe (Right unsub) Left sub
-
-popPubRequest :: (RedisCtx m f, Applicative m, Traversable f)
-              => m (f (Maybe (Pub Submitted)))
-popPubRequest = lpop "publish:queue" >>= (traverse (traverse fromByteString))
 
 pushPublishQueue :: RedisCtx m f => Pub Submitted -> m (f Integer)
 pushPublishQueue (Pub _ (PubInfos url _ _)) =
@@ -176,9 +155,6 @@ registerFeed topic = set (B.append "known_feed:" topic) "1"
 
 knownFeed :: RedisCtx m f => B.ByteString -> m (f Bool)
 knownFeed topic = exists (B.append "known_feed:"  topic)
-
-initSubscriberCounter :: RedisCtx m f => B.ByteString -> m (f Status)
-initSubscriberCounter topic = set (B.append "subs:" topic) "0"
 
 incrSubscriberCount :: RedisCtx m f => B.ByteString -> m (f Integer)
 incrSubscriberCount topic = incr (B.append "subs:" topic)

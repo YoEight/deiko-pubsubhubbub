@@ -81,7 +81,6 @@ publish = do
     where
       persistPublishRequest url = do
             let persist (Just pub) = unitRedis $
-                                     pushPublishEvent pub *>
                                      pushPublishQueue pub
                 persist _          = returnRedis ()
             result <- runEitherT $ executeRedis $
@@ -104,11 +103,10 @@ updateSubFigures :: (MonadIO m, MonadError HubError m) => Sub Verified -> m ()
 updateSubFigures sub@(Sub _ (SubInfos _ params _)) =
   let encodedTopic = encodeUtf8 $ subTopic params
       incr = unitRedis (incrSubscriberCount encodedTopic)
-      init = unitRedis
-             (registerFeed encodedTopic <* initSubscriberCounter encodedTopic)
+      init = unitRedis (registerFeed encodedTopic)
       proceed exist
         | exist     = incr
-        | otherwise = init
+        | otherwise = init >> incr
       action sub = saveSubscription sub >>
                    bindRedis proceed (knownFeed encodedTopic)
       registration handle = unregisterSub sub handle >>
