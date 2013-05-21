@@ -32,6 +32,9 @@ import           Database.SQLite       hiding (Status)
 
 import           System.Directory
 
+import           Text.Atom.Feed        (Feed)
+import           Text.XML.Light
+
 sqliteDbName :: String
 sqliteDbName = "/hub.db"
 
@@ -105,15 +108,30 @@ withSqliteConnection f =
      liftIO $ closeConnection handle
      return a
 
+sqliteExecParamStmt :: (MonadIO m, MonadError HubError m, SQLiteResult a)
+                    => String
+                    -> [(String, Value)]
+                    -> (SQLiteHandle -> m [[Row a]])
+sqliteExecParamStmt query params handle =
+  go =<< (liftIO $ execParamStatement handle query params)
+    where
+      go = either (throwError . InternalError . fromString) return
+
+sqliteExecParamStmt_ :: (MonadIO m, MonadError HubError m)
+                     => String
+                     -> [(String, Value)]
+                     -> (SQLiteHandle -> m ())
+sqliteExecParamStmt_ query params handle =
+  go =<< (liftIO $ execParamStatement_ handle query params)
+    where
+      go = maybe (return ()) (throwError . InternalError . fromString)
+
 unregisterSub :: (MonadIO m, MonadError HubError m, Ended v w)
               => Sub w
-              -> SQLiteHandle
-              -> m ()
-unregisterSub sub handle =
-  do result <- liftIO $ execParamStatement_ handle
-               deleteSubQuery $
-               deleteSubParams (subParams $ subInfos sub)
-     maybe (return ()) (throwError . InternalError . fromString) result
+              -> (SQLiteHandle -> m ())
+unregisterSub sub =
+  sqliteExecParamStmt_ deleteSubQuery
+                         (deleteSubParams (subParams $ subInfos sub))
 
 deleteSubQuery :: String
 deleteSubQuery =
@@ -126,13 +144,10 @@ deleteSubParams (SubParams cb _ topic _ _ _ _) =
 
 registerSub :: (MonadIO m, MonadError HubError m, Ended v w)
             => Sub w
-            -> SQLiteHandle
-            -> m ()
-registerSub sub handle =
-  do result <- liftIO $ execParamStatement_ handle
-               registerSubQuery $
-               registerSubParams $ subParams $ subInfos sub
-     maybe (return ()) (throwError . InternalError . fromString) result
+            -> (SQLiteHandle -> m ())
+registerSub sub =
+  sqliteExecParamStmt_ registerSubQuery
+                         (registerSubParams $ subParams $ subInfos sub)
 
 registerSubQuery :: String
 registerSubQuery =
@@ -148,7 +163,6 @@ registerSubParams (SubParams cb _ topic _ lease secr _) =
   where
     secret = maybe Null (Blob . encodeUtf8) secr
     lease0 = maybe Null (Int . fromIntegral) lease
-
 
 registerFeed :: RedisCtx m f => B.ByteString -> m (f Status)
 registerFeed topic = set (B.append "known_feed:" topic) "1"

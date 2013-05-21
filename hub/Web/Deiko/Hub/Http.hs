@@ -17,6 +17,7 @@ import Data.Text.Encoding        (encodeUtf8)
 import Network.Curl              (CurlResponse_ (..), curlGetResponse_)
 import Network.HTTP.Types.Status (Status, status204, status400)
 
+import Text.Atom.Feed            (Feed)
 import Text.Atom.Feed.Import     (elementFeed)
 import Text.XML.Light            (parseXMLDoc)
 
@@ -54,15 +55,13 @@ subParamsQuery (SubParams callback mode topic verify _ _ _) challenge =
                ,"hub.challenge=" <> challenge
                ,"hub.lease_seconds=10"]
 
-fetchContent :: MonadIO m => String -> m ()
+fetchContent :: MonadIO m => String -> m (Maybe Feed)
 fetchContent url =
   do resp <- liftIO $ curl url
      case (respStatus resp, respBody resp) of
        (status, body)
-         | validStatus status ->
-           unwrapMonad $ traverse_ (WrapMonad . liftIO . print)
-                         (elementFeed =<< parseXMLDoc body)
-         | otherwise          -> liftIO $ print "non valid atom feed"
+         | validStatus status -> return (elementFeed =<< parseXMLDoc body)
+         | otherwise          -> return Nothing
 
 curl :: String -> CurlResp
 curl = flip curlGetResponse_ $ []
