@@ -1,7 +1,7 @@
 create table subscriptions (
   topic         varchar not null,
   callback      varchar not null,
-  lease_seconds number  not null,
+  lease_seconds number  null,
   secret        varchar
 );
 
