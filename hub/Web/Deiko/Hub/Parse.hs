@@ -46,7 +46,11 @@ newtype ParamParser a = ParamParser { runParamParser :: RWS () Chariot ReqState 
 
 instance Monoid Chariot where
     mempty  = Chariot mempty
-    mappend (Chariot l) (Chariot r) = Chariot $ S.append l $ S.append "\n" r
+    mappend (Chariot l) (Chariot r)
+      | S.null l && S.null r = Chariot mempty
+      | S.null l             = Chariot r
+      | S.null r             = Chariot l
+      | otherwise            = Chariot $ S.append l $ S.append "\n" r
 
 setCallback, setMode, setTopic, setSecret, setVerifyToken, addVerifyParam, log :: S.Text -> ParamParser ()
 
