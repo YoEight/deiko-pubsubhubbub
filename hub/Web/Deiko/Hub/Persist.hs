@@ -154,7 +154,7 @@ registerSub sub =
 
 registerSubQuery :: String
 registerSubQuery =
-  "insert into subscriptions (topic, callback, lease_second, secret) values " ++
+  "insert into subscriptions (topic, callback, lease_seconds, secret) values " ++
   "(:topic, :callback, :lease, :secret)"
 
 registerSubParams :: SubParams -> [(String, Value)]
