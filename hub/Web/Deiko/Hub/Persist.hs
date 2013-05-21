@@ -21,6 +21,7 @@ import           Data.ByteString.Lazy  (fromStrict, toStrict)
 import           Data.Foldable
 import           Data.Functor.Identity (Identity (..))
 import           Data.Hashable
+import           Data.Int              (Int8)
 import           Data.Monoid           (Monoid (..))
 import           Data.String
 import qualified Data.Text             as S
@@ -197,7 +198,7 @@ incrSubscriberCount topic = incr (B.append "subs:" topic)
 
 subscriberCount :: (RedisCtx m f, Functor f)
                 => B.ByteString
-                -> m (f (Maybe Integer))
+                -> m (f (Maybe Int8))
 subscriberCount topic = liftM (((decode . fromStrict) <$>) <$>)
                         (get $ B.append "subs:" topic)
 
