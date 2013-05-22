@@ -48,13 +48,17 @@ asyncQueueMain :: MonadIO m => m ()
 asyncQueueMain = eventLoop fetching
                  (runEitherT . updateSubFigures)
                  (runEitherT . confirmUnsub)
+                 (error "todo")
   where
     fetching bytes =
       do res  <- fetchContent (unpack bytes)
          time <- liftIO getCurrentTime
-         maybe (return $ Right ())
-                 (runEitherT . withSqliteConnection . saveFetchedFeed time)
-                 res
+         unwrapMonad $ traverse_ (WrapMonad . runEitherT . process) res
+
+    process feed =
+      do time <- liftIO getCurrentTime
+         withSqliteConnection (saveFetchedFeed time feed)
+         executeRedis $ publishFeed feed
 
 errorHandle :: HubError -> ActionM ()
 errorHandle (BadRequest e)     = status status400 >> text e

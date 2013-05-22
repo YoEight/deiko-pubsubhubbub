@@ -5,39 +5,42 @@
 
 module Web.Deiko.Hub.Persist where
 
-import           Web.Deiko.Hub.Http    (verify)
-import           Web.Deiko.Hub.Parse   (validateUrl)
+import           Web.Deiko.Hub.Http         (verify)
+import           Web.Deiko.Hub.Parse        (validateUrl)
 import           Web.Deiko.Hub.Types
 
 import           Control.Applicative
 import           Control.Monad.Error
 import           Control.Monad.Trans
+import           Control.Monad.Trans.Either
 
-import           Data.Binary           hiding (get)
+import           Data.Binary                hiding (get)
 import           Data.Binary.Put
-import qualified Data.ByteString       as B
-import           Data.ByteString.Char8 (pack, unpack)
-import           Data.ByteString.Lazy  (fromStrict, toStrict)
+import qualified Data.ByteString            as B
+import           Data.ByteString.Char8      (pack, unpack)
+import           Data.ByteString.Lazy       (fromStrict, toStrict)
 import           Data.Foldable
-import           Data.Functor.Identity (Identity (..))
+import           Data.Functor.Identity      (Identity (..))
 import           Data.Hashable
-import           Data.Int              (Int8)
-import           Data.Monoid           (Monoid (..))
+import           Data.Int                   (Int8)
+import           Data.Monoid                (Monoid (..))
 import           Data.String
-import qualified Data.Text             as S
-import           Data.Text.Encoding    (encodeUtf8)
-import           Data.Time.Clock       (UTCTime, getCurrentTime)
-import           Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import qualified Data.Text                  as S
+import           Data.Text.Encoding         (encodeUtf8)
+import           Data.Time.Clock            (UTCTime, getCurrentTime)
+import           Data.Time.Clock.POSIX      (utcTimeToPOSIXSeconds)
 import           Data.Traversable
 
-import           Database.Redis        hiding (decode)
-import           Database.SQLite       hiding (Status)
+import           Database.Redis             hiding (decode)
+import           Database.SQLite            hiding (Status)
 
 import           System.Directory
 
-import           Text.Atom.Feed        (Feed (..))
-import           Text.Atom.Feed.Export (xmlFeed)
-import           Text.XML.Light        (showElement)
+import           Text.Atom.Feed             (Feed (..))
+import           Text.Atom.Feed.Export      (xmlFeed)
+import           Text.Atom.Feed.Import      (elementFeed)
+import           Text.XML.Light             (parseXMLDoc, showElement)
+
 
 sqliteDbName :: String
 sqliteDbName = "/hub.db"
@@ -55,8 +58,9 @@ eventLoop :: MonadIO m
           => (forall n. MonadIO n => B.ByteString -> n a)
           -> (forall n. MonadIO n => Sub Verified -> n b)
           -> (forall n. MonadIO n => Sub (Deletion Verified) -> n c)
+          -> (forall n. MonadIO n => Feed -> n d)
           -> m ()
-eventLoop onPublish onSub onDel =
+eventLoop onPublish onSub onDel onFetch =
   liftIO $
   connect defaultConnectInfo >>= \handle ->
     runRedis handle $
@@ -67,15 +71,25 @@ eventLoop onPublish onSub onDel =
         "publish"     -> unit $ onPublish msg
         "async_sub"   -> unit (fromByteString msg >>= (verifying onSub))
         "async_unsub" -> unit (fromByteString msg >>= (verifying onDel))
+        "fetched"     -> unit $
+                         do result <- runEitherT $ withSqliteConnection
+                                      (getFeedById (unpack msg))
+                            case result of
+                              Left e     -> liftIO $ print $ show e
+                              Right feed ->
+                                maybe (return ()) (liftM (const ()) . onFetch) feed
 
     unit m = m >> return mempty
+
+    void _  = return ()
 
     verifying f e = do (_, res) <- verify e
                        maybe (return ()) (((return ()) <*) . f) res
 
     channels = ["publish"
                ,"async_sub"
-               ,"async_unsub"]
+               ,"async_unsub"
+               ,"fetched"]
 
 saveSubscription :: (Verification v, ToValue v, RedisCtx m f)
                  => Sub v
@@ -101,6 +115,9 @@ pushAsyncSubRequest s =
 pushPublishQueue :: RedisCtx m f => Pub Submitted -> m (f Integer)
 pushPublishQueue (Pub _ (PubInfos url _ _)) =
   publish "publish" (encodeUtf8 url)
+
+publishFeed :: RedisCtx m f => Feed -> m (f Integer)
+publishFeed feed = publish "fetched" (pack $ feedId $ feed)
 
 withSqliteConnection :: (MonadIO m, MonadError HubError m)
                      => (SQLiteHandle -> m a)
@@ -186,6 +203,25 @@ feedParams time feed =
   in [(":feed_id", Text (feedId feed))
      ,(":fetch_date", Int (round $ utcTimeToPOSIXSeconds time))
      ,(":xml", Blob content)]
+
+getFeedByIdQuery :: String
+getFeedByIdQuery =
+  "select xml from fetched_feeds where feed_id = :feed_id"
+
+getFeedByIdParams :: String -> [(String, Value)]
+getFeedByIdParams fId = [(":feed_id", Text fId)]
+
+getFeedById :: (MonadIO m, MonadError HubError m)
+            => String
+            -> (SQLiteHandle -> m (Maybe Feed))
+getFeedById fId handle =
+  do result <- f handle
+     case result of
+       (((("xml", Text xml):_):_):_) -> return (elementFeed =<< parseXMLDoc xml)
+       _                             -> return Nothing
+
+  where
+    f = sqliteExecParamStmt getFeedByIdQuery (getFeedByIdParams fId)
 
 registerFeed :: RedisCtx m f => B.ByteString -> m (f Status)
 registerFeed topic = set (B.append "known_feed:" topic) "1"
