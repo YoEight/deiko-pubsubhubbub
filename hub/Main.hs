@@ -52,7 +52,6 @@ asyncQueueMain = eventLoop fetching
   where
     fetching bytes =
       do res  <- fetchContent (unpack bytes)
-         time <- liftIO getCurrentTime
          unwrapMonad $ traverse_ (WrapMonad . runEitherT . process) res
 
     process feed =
