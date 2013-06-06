@@ -17,6 +17,7 @@ import           Control.Monad
 import           Control.Monad.Trans
 
 import           Control.Monad.Error
+import           Control.Monad.Reader       (MonadReader (..), ReaderT (..))
 import           Control.Monad.Trans.Either
 
 import qualified Data.ByteString            as B
@@ -24,7 +25,7 @@ import           Data.ByteString.Char8      (unpack)
 import qualified Data.ByteString.Lazy       as L
 import           Data.Foldable              (traverse_)
 import           Data.Monoid                ((<>))
-import           Data.String
+import           Data.String                (IsString (..))
 import qualified Data.Text                  as S
 import           Data.Text.Encoding         (decodeUtf8, encodeUtf8)
 import qualified Data.Text.Lazy             as T
@@ -32,19 +33,28 @@ import           Data.Time.Clock            (getCurrentTime)
 import           Data.Traversable           (traverse)
 
 import           Network.HTTP.Types.Status
+
+import           Text.Deiko.Config          (CanReport (..), ConfigError (..))
+
 import           Web.Scotty
 
+instance CanReport ScottyM where
+  configError = liftIO . configError
+
+type HubAction a = ReaderT DbOpts ActionM a
+
 main = scotty 3000 $ do
-         post "/hub" $ go =<< param "hub.mode"
+         opts <- loadDbOpts
+         post "/hub" $ go opts =<< param "hub.mode"
 
     where
-      go :: B.ByteString -> ActionM ()
-      go "subscribe"   = subscription updateSubFigures
-      go "unsubscribe" = subscription confirmUnsub
-      go "publish"     = publish
-      go _             = status status404
+      go :: DbOpts -> B.ByteString -> ActionM ()
+      go opts "subscribe"   = runReaderT (subscription updateSubFigures) opts
+      go opts "unsubscribe" = runReaderT (subscription confirmUnsub) opts
+      go _    "publish"     = publish
+      go _ _                = status status404
 
-asyncQueueMain :: MonadIO m => m ()
+asyncQueueMain :: (CanReport m, MonadIO m) => m ()
 asyncQueueMain = eventLoop fetching
                  (runEitherT . updateSubFigures)
                  (runEitherT . confirmUnsub)
@@ -67,12 +77,12 @@ errorHandle (InternalError e)  = status status500 >> text e >> (liftIO $ print e
 
 subscription :: (Start v, Pending v, ToValue v, Ended v w, Verification v
                 , Async (Sub v), Verification w)
-             => (forall m. (MonadIO m, MonadError HubError m) => Sub w -> m a)
-             -> ActionM ()
+             => (forall m. (MonadIO m, MonadError HubError m, MonadReader DbOpts m) => Sub w -> m a)
+             -> HubAction ()
 subscription whenVerified = do
-  xs     <- params
+  xs     <- lift params
   report <- runEitherT $ process $ fmap (T.toStrict *** T.toStrict) xs
-  either errorHandle status report
+  either (lift . errorHandle) (lift . status) report
     where
       process params = do request <- parseSubParams params
                           sub     <- makeSub start request
@@ -111,7 +121,8 @@ verification sub = go $ subVerify $ subParams $ subInfos sub
     go (_:xs)      = go xs
     go []          = throwError $ BadRequest "Unsupported verification mode"
 
-updateSubFigures :: (MonadIO m, MonadError HubError m) => Sub Verified -> m ()
+updateSubFigures :: (MonadIO m, MonadError HubError m, MonadReader DbOpts m)
+                 => Sub Verified -> m ()
 updateSubFigures sub@(Sub _ (SubInfos _ params _)) =
   let encodedTopic = encodeUtf8 $ subTopic params
       incr = unitRedis (incrSubscriberCount encodedTopic)
@@ -126,7 +137,7 @@ updateSubFigures sub@(Sub _ (SubInfos _ params _)) =
   in do executeRedis $ action sub
         withSqliteConnection registration
 
-confirmUnsub :: (MonadIO m, MonadError HubError m)
+confirmUnsub :: (MonadIO m, MonadError HubError m, MonadReader DbOpts m)
              => Sub (Deletion Verified)
              -> m ()
 confirmUnsub sub = (executeRedis $ saveSubscription sub) >>
