@@ -23,6 +23,7 @@ import           Control.Monad.Trans.Either
 import qualified Data.ByteString            as B
 import           Data.ByteString.Char8      (unpack)
 import qualified Data.ByteString.Lazy       as L
+import           Data.Conduit
 import           Data.Foldable              (traverse_)
 import           Data.Monoid                ((<>))
 import           Data.String                (IsString (..))
@@ -34,6 +35,7 @@ import           Data.Traversable           (traverse)
 
 import           Network.HTTP.Types.Status
 
+import           Text.Atom.Feed             (Feed (..))
 import           Text.Deiko.Config          (CanReport (..), ConfigError (..))
 
 import           Web.Scotty
@@ -58,7 +60,7 @@ asyncQueueMain :: (CanReport m, MonadIO m) => m ()
 asyncQueueMain = eventLoop fetching
                  (runEitherT . updateSubFigures)
                  (runEitherT . confirmUnsub)
-                 (error "todo")
+                 (distribute)
   where
     fetching bytes =
       do res  <- fetchContent (unpack bytes)
@@ -68,6 +70,12 @@ asyncQueueMain = eventLoop fetching
       do time <- liftIO getCurrentTime
          withSqliteConnection (saveFetchedFeed time feed)
          executeRedis $ publishFeed feed
+
+    distribute feed =
+      let prod        = runSqliteStmt (loadSubs (feedId feed))
+          action opts = prod opts $$ printer in
+      do opts <- ask
+         liftIO $ runResourceT (action opts)
 
 errorHandle :: HubError -> ActionM ()
 errorHandle (BadRequest e)     = status status400 >> text e

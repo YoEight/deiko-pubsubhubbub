@@ -41,3 +41,4 @@ executable deiko-hub
                        , deiko-feed ==0.3.9
                        , deiko-config ==0.1.*
                        , HTTP ==4000.2.8
+                       , conduit ==1.0.5

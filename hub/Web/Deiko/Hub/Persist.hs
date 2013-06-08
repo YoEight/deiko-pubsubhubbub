@@ -10,9 +10,10 @@ import           Web.Deiko.Hub.Parse        (validateUrl)
 import           Web.Deiko.Hub.Types
 
 import           Control.Applicative
-import           Control.Exception          (ioError)
+import           Control.Exception          (ioError, throw)
 import           Control.Monad.Error
-import           Control.Monad.Reader       (MonadReader, ReaderT (..), asks)
+import           Control.Monad.Reader       (MonadReader (..), ReaderT (..),
+                                             asks)
 import           Control.Monad.Trans
 import           Control.Monad.Trans.Either
 
@@ -21,6 +22,7 @@ import           Data.Binary.Put
 import qualified Data.ByteString            as B
 import           Data.ByteString.Char8      (pack, unpack)
 import           Data.ByteString.Lazy       (fromStrict, toStrict)
+import           Data.Conduit
 import           Data.Foldable
 import           Data.Functor.Identity      (Identity (..))
 import           Data.Hashable
@@ -51,17 +53,19 @@ data DbOpts = DbOpts { dbLocation        :: String
                      , dbFeedByIdQuery   :: String
                      , dbInsertSubQuery  :: String
                      , dbInsertFeedQuery :: String
-                     , dbDeleteSubQuery  :: String }
+                     , dbDeleteSubQuery  :: String
+                     , dbSubByTopic      :: String }
 
 loadDbOpts :: (MonadIO m, CanReport m) => m DbOpts
 loadDbOpts = do
-  config <- loadConfig "conf/db.conf"
-  liftM5 DbOpts
-           (getValue "db.name" config)
-           (getValue "db.queries.feed-id" config)
-           (getValue "db.queries.insert.sub" config)
-           (getValue "db.queries.insert.feed" config)
-           (getValue "db.queries.delete.sub" config)
+  config      <- loadConfig "conf/db.conf"
+  location    <- getValue "db.name" config
+  getFeedId   <- getValue "db.queries.feed-id" config
+  insertSub   <- getValue "db.queries.insert.sub" config
+  insertFeed  <- getValue "db.queries.insert.feed" config
+  deleteSub   <- getValue "db.queries.delete.sub" config
+  getSubTopic <- getValue "db.queries.sub-topic" config
+  return (DbOpts location getFeedId insertSub insertFeed deleteSub getSubTopic)
 
 executeRedis :: (MonadIO m, MonadError HubError m)
              => Redis (Either Reply a)
@@ -93,21 +97,17 @@ eventLoop onPublish onSub onDel onFetch = do
         "async_unsub" -> unit (fromByteString msg >>= \sub ->
                                  runReaderT (verifying onDel sub) opts)
         "fetched"     -> unit $
-                         do result <- runEitherT $ runReaderT
-                                      (withSqliteConnection (getFeedById (unpack msg)))
-                                      opts
-                            case result of
-                              Left msg   -> ioError $ userError (show msg)
-                              Right feed -> maybe (return ())
-                                            (\f ->
-                                             liftM (const ())
-                                             (runReaderT (onFetch f) opts))
-                                            feed
+                         do feed <- fetchAction opts msg
+                            maybe (return ())
+                                    (\f -> void $ runReaderT (onFetch f) opts)
+                                    feed
 
+    fetchAction opts msg =
+      let prod   = runSqliteStmt (getFeedById (unpack msg)) opts
+          action = prod $$ rowToFeed in
+      runResourceT action
 
     unit m = m >> return mempty
-
-    void _  = return ()
 
     verifying f e = do (_, res) <- verify e
                        maybe (return ()) (((return ()) <*) . f) res
@@ -156,14 +156,24 @@ withSqliteConnection f = do
   liftIO $ closeConnection handle
   return a
 
-sqliteExecParamStmt :: (MonadIO m, MonadError HubError m, SQLiteResult a)
-                    => String
-                    -> [(String, Value)]
-                    -> (SQLiteHandle -> m [[Row a]])
-sqliteExecParamStmt query params handle =
-  go =<< (liftIO $ execParamStatement handle query params)
-    where
-      go = either (throwError . InternalError . fromString) return
+runSqliteStmt ::(DbOpts -> SQLiteHandle -> Producer (ResourceT IO) a)
+              -> DbOpts
+              -> Producer (ResourceT IO) a
+runSqliteStmt k opts =
+  bracketP (openConnection (dbLocation opts))
+           closeConnection (k opts)
+
+type DbAction a = DbOpts -> SQLiteHandle -> Producer (ResourceT IO) a
+
+loadSubs :: String -> DbAction [Row Value]
+loadSubs topic opts handle = do
+  result <- liftIO $ execParamStatement handle (dbSubByTopic opts) params
+  either (liftIO . ioError . userError) (traverse_ yield) result
+  where
+    params = [(":topic", Text topic)]
+
+printer :: (Show a, MonadIO m) => Consumer a m ()
+printer = awaitForever (liftIO . print)
 
 sqliteExecParamStmt_ :: (MonadIO m, MonadError HubError m)
                      => String
@@ -227,18 +237,31 @@ feedParams time feed =
 getFeedByIdParams :: String -> [(String, Value)]
 getFeedByIdParams fId = [(":feed_id", Text fId)]
 
-getFeedById :: (MonadIO m, MonadError HubError m, MonadReader DbOpts m)
-            => String
-            -> (SQLiteHandle -> m (Maybe Feed))
-getFeedById fId handle = do
-  query  <- asks dbFeedByIdQuery
-  result <- f query handle
-  case result of
-    (((("xml", Text xml):_):_):_) -> return (elementFeed =<< parseXMLDoc xml)
-    _                             -> return Nothing
-
+getFeedById :: String -> DbAction [Row Value]
+getFeedById feedId opts handle = do
+  result <- liftIO $ execParamStatement handle feedId params
+  either (liftIO . ioError . userError) (traverse_ yield) result
   where
-    f query = sqliteExecParamStmt query (getFeedByIdParams fId)
+    params = [(":feed_id", Text feedId)]
+
+rowToFeed :: Consumer [Row Value] (ResourceT IO) (Maybe Feed)
+rowToFeed = do
+  res <- await
+  return ((elementFeed <=< parseXMLDoc) . go =<< res)
+  where
+    go ((("xml", Text xml):_):_) = xml
+-- getFeedById :: (MonadIO m, MonadError HubError m, MonadReader DbOpts m)
+--             => String
+--             -> (SQLiteHandle -> m (Maybe Feed))
+-- getFeedById fId handle = do
+--   query  <- asks dbFeedByIdQuery
+--   result <- f query handle
+--   case result of
+--     (((("xml", Text xml):_):_):_) -> return (elementFeed =<< parseXMLDoc xml)
+--     _                             -> return Nothing
+
+--   where
+--     f query = sqliteExecParamStmt query (getFeedByIdParams fId)
 
 registerFeed :: RedisCtx m f => B.ByteString -> m (f Status)
 registerFeed topic = set (B.append "known_feed:" topic) "1"

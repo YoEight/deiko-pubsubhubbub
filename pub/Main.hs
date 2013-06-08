@@ -11,5 +11,6 @@ main = scotty 5000 $ do
 
 process :: ActionM ()
 process =
-  do  header "Content-Type" "application/atom+xml" 
-      file "feed_test.xml"
+  do liftIO $ print "Fetch request"  
+     header "Content-Type" "application/atom+xml" 
+     file "feed_test.xml"
