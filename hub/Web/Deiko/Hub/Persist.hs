@@ -150,8 +150,7 @@ withSqliteConnection :: (MonadIO m, MonadError HubError m, MonadReader DbOpts m)
                      -> m a
 withSqliteConnection f = do
   location <- asks dbLocation
-  handle   <- liftIO $ getCurrentDirectory >>=
-              \dir -> openConnection (dir ++ location)
+  handle   <- liftIO $ openConnection location
   a        <- f handle
   liftIO $ closeConnection handle
   return a

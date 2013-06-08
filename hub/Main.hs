@@ -24,7 +24,7 @@ import qualified Data.ByteString            as B
 import           Data.ByteString.Char8      (unpack)
 import qualified Data.ByteString.Lazy       as L
 import           Data.Conduit
-import           Data.Foldable              (traverse_)
+import           Data.Foldable              (foldMap, traverse_)
 import           Data.Monoid                ((<>))
 import           Data.String                (IsString (..))
 import qualified Data.Text                  as S
@@ -34,6 +34,11 @@ import           Data.Time.Clock            (getCurrentTime)
 import           Data.Traversable           (traverse)
 
 import           Network.HTTP.Types.Status
+
+import           System.Log.Formatter
+import           System.Log.Handler         hiding (setLevel)
+import           System.Log.Handler.Simple
+import           System.Log.Logger
 
 import           Text.Atom.Feed             (Feed (..))
 import           Text.Deiko.Config          (CanReport (..), ConfigError (..))
@@ -45,8 +50,13 @@ instance CanReport ScottyM where
 
 type HubAction a = ReaderT DbOpts ActionM a
 
-main = scotty 3000 $ do
-         opts <- loadDbOpts
+main = do
+  opts    <- loadDbOpts
+  handler <- fileHandler "hub.log" INFO
+  let formatter = simpleLogFormatter "$time:[$tid]:[$prio]:$loggername> $msg"
+      fHandler  = setFormatter handler formatter
+  updateGlobalLogger rootLoggerName (setLevel INFO . setHandlers [fHandler])
+  scotty 3000 $ do
          post "/hub" $ go opts =<< param "hub.mode"
 
     where
@@ -75,13 +85,19 @@ asyncQueueMain = eventLoop fetching
       let prod        = runSqliteStmt (loadSubs (feedId feed))
           action opts = prod opts $$ printer in
       do opts <- ask
+         liftIO $ print (feedId feed)
          liftIO $ runResourceT (action opts)
 
 errorHandle :: HubError -> ActionM ()
-errorHandle (BadRequest e)     = status status400 >> text e
+errorHandle (BadRequest e)     = do
+  liftIO $ infoM "Main" ("BadRequest: " ++ (show e))
+  status status400
+  text e
 errorHandle VerificationFailed = status status400 >> text "Verification failed"
 errorHandle (ParseError e)     = status status400 >> text e
-errorHandle (InternalError e)  = status status500 >> text e >> (liftIO $ print e)
+errorHandle (InternalError e)  = do
+  liftIO $ errorM "Main" (show e)
+  status status500
 
 subscription :: (Start v, Pending v, ToValue v, Ended v w, Verification v
                 , Async (Sub v), Verification w)
@@ -89,7 +105,9 @@ subscription :: (Start v, Pending v, ToValue v, Ended v w, Verification v
              -> HubAction ()
 subscription whenVerified = do
   xs     <- lift params
+  liftIO $ infoM "Main" (logParams xs)
   report <- runEitherT $ process $ fmap (T.toStrict *** T.toStrict) xs
+  liftIO $ infoM "Main" "Verification passed"
   either (lift . errorHandle) (lift . status) report
     where
       process params = do request <- parseSubParams params
@@ -102,6 +120,9 @@ subscription whenVerified = do
                             (status, verifiedSub) ->
                                 traverse_ whenVerified verifiedSub >>
                                           return status
+      logParams params =
+        "\nSubscription handler\n" ++
+        foldMap (\(p, v) -> (show p) ++ ": " ++ (show v) ++ "\n") params
 
 publish :: ActionM ()
 publish = do

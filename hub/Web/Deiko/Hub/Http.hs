@@ -5,6 +5,7 @@
 module Web.Deiko.Hub.Http (verify, fetchContent) where
 
 import Control.Applicative       (Applicative, WrappedMonad (..))
+import Control.Exception
 import Control.Monad             (liftM, (<=<))
 import Control.Monad.Trans       (MonadIO (..))
 
@@ -15,10 +16,13 @@ import Data.String               (IsString (..))
 import Data.Text                 (Text, unpack)
 import Data.Text.Encoding        (encodeUtf8)
 
-import Network.HTTP              (Response (..), getRequest, postRequestWithBody,
-                                  simpleHTTP)
+import Network.HTTP              (Response (..), getRequest,
+                                  postRequestWithBody, simpleHTTP)
 import Network.HTTP.Types.Status (Status, status204, status400, status500)
 import Network.Stream            (Result, failMisc)
+
+import System.IO.Error           (catchIOError)
+import System.Log.Logger         (errorM)
 
 import Text.Atom.Feed            (Feed)
 import Text.Atom.Feed.Import     (elementFeed)
@@ -33,7 +37,12 @@ verify :: (MonadIO m, Pending v, Ended v w, Verification w)
        -> m (Status, Maybe (Sub w))
 verify = go . subParams . subInfos
   where
-    onError _ = (status500, Nothing)
+    onError _ = (status400, Nothing)
+
+    onIOError url x = do
+      errorM "Web.Deiko.Hub.Http.verify" ("Can't reach url: " ++ url)
+      return $ failMisc "connection error"
+
     go params = do
       challenge <- randomString
       sub       <- makeSub end params
@@ -42,7 +51,7 @@ verify = go . subParams . subInfos
           handle back
             | back == unpack challenge = (status204, Just sub)
             | otherwise                = (status400, Nothing)
-      resp  <- liftIO $ simpleHTTP request
+      resp  <- liftIO $ (simpleHTTP request `catchIOError` (onIOError url))
       return $ either onError id ((onValidStatus handle) =<< resp)
 
 randomString :: (MonadIO m, IsString s) => m s
