@@ -1,16 +1,19 @@
-{-# LANGUAGE FlexibleInstances      #-}
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE GADTs                  #-}
-{-# LANGUAGE MultiParamTypeClasses  #-}
-{-# LANGUAGE OverloadedStrings      #-}
-{-# LANGUAGE UndecidableInstances   #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE FunctionalDependencies     #-}
+{-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE UndecidableInstances       #-}
 
 module Web.Deiko.Hub.Types where
 
-import           Prelude              hiding (lookup)
+import           Prelude              hiding (empty, lookup, singleton)
 
 import           Control.Applicative  (Applicative, (<$>))
 import           Control.Monad        (liftM)
+import           Control.Monad.Reader
+import           Control.Monad.State
 import           Control.Monad.Trans  (MonadIO (..))
 
 import           Data.Binary
@@ -24,6 +27,7 @@ import           Data.Foldable        (foldMap)
 import           Data.Hashable
 import           Data.Int
 import           Data.Monoid
+import           Data.Sequence        (Seq, empty, singleton, (|>))
 import           Data.String          (IsString (..))
 import qualified Data.Text            as S
 import           Data.Text.Encoding   (encodeUtf8)
@@ -66,11 +70,30 @@ data HubError = BadRequest T.Text
               | ParseError T.Text
               | InternalError T.Text deriving (Eq, Show)
 
+data DbOpts = DbOpts { dbLocation        :: String
+                     , dbFeedByIdQuery   :: String
+                     , dbInsertSubQuery  :: String
+                     , dbInsertFeedQuery :: String
+                     , dbDeleteSubQuery  :: String
+                     , dbSubByTopic      :: String }
+
+data HubOpts = HubOpts { hubDbOpts :: DbOpts }
+
+data HubEvent = HubEvent
+
 instance Show a => Show (Sub a) where
     show (Sub state infos) = mconcat ["Sub ", show state, show infos]
 
 instance Show a => Show (Pub a) where
     show (Pub state url) = mconcat ["Pub ", show state, show url]
+
+newtype Hub m a = Hub {
+    unHub :: ReaderT HubOpts (StateT (Seq HubEvent) m) a
+  } deriving (Functor, Applicative, Monad, MonadReader HubOpts
+             , MonadState (Seq HubEvent), MonadIO)
+
+instance MonadTrans Hub where
+  lift = lift
 
 class Verification a
 class Publishing a
@@ -254,3 +277,9 @@ makeSub :: (MonadIO m, Verification v)
 makeSub v params = liftM ((Sub v) . (SubInfos 1 params)) currentTime
   where
     currentTime = liftIO getCurrentTime
+
+logEvent :: Monad m => HubEvent -> Hub m ()
+logEvent = modify . flip (|>)
+
+emptyEvents :: Seq HubEvent
+emptyEvents = empty
