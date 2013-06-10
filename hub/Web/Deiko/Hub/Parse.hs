@@ -39,7 +39,7 @@ data ReqState = RS { srsCallback     :: Maybe S.Text
                    , srsSecret       :: Maybe S.Text
                    , srsVerifyToken  :: Maybe S.Text }
 
-newtype Chariot = Chariot { unChariot :: S.Text }
+newtype Chariot = Chariot { unChariot :: String }
 
 newtype ParamParser a = ParamParser { runParamParser :: RWS () Chariot ReqState a }
     deriving (Monad, MonadState ReqState, MonadWriter Chariot, Functor, Applicative)
@@ -47,12 +47,12 @@ newtype ParamParser a = ParamParser { runParamParser :: RWS () Chariot ReqState 
 instance Monoid Chariot where
     mempty  = Chariot mempty
     mappend (Chariot l) (Chariot r)
-      | S.null l && S.null r = Chariot mempty
-      | S.null l             = Chariot r
-      | S.null r             = Chariot l
-      | otherwise            = Chariot $ S.append l $ S.append "\n" r
+      | null l && null r = Chariot ""
+      | null l           = Chariot r
+      | null r           = Chariot l
+      | otherwise        = Chariot (l ++ "\n" ++ r)
 
-setCallback, setMode, setTopic, setSecret, setVerifyToken, addVerifyParam, log :: S.Text -> ParamParser ()
+setCallback, setMode, setTopic, setSecret, setVerifyToken, addVerifyParam :: S.Text -> ParamParser ()
 
 setCallback t = modify $ \s -> s{srsCallback=Just t}
 
@@ -72,38 +72,59 @@ addVerifyParam param = modify go
       go s@(RS{srsVerify=Nothing}) = s{srsVerify=Just [param]}
       go s@(RS{srsVerify=Just xs}) = s{srsVerify=Just $ mconcat [xs, [param]]}
 
+log :: String -> ParamParser ()
 log = tell . Chariot
 
 evalParamParser :: (S.Text -> S.Text -> S.Text -> [S.Text] -> Maybe Int -> Maybe S.Text -> Maybe S.Text -> a -> b)
                 -> ParamParser a
                 -> ReqState
-                -> Either S.Text b
+                -> Either String b
 evalParamParser k (ParamParser p) s =
-    case runRWS p () s of
-      (a, (RS callback mode topic verify leaseSeconds secret verifyToken), (Chariot logs))
-          | S.null logs -> maybe (Left "mandatory paramaters are missing")  Right (k <$> callback <*> mode <*> topic <*> verify <*> pure leaseSeconds <*> pure secret <*> pure verifyToken <*> pure a)
-          | otherwise  -> Left logs
+  case runRWS p () s of
+    (a, (RS callback mode topic verify leaseSeconds secret verifyToken), (Chariot logs))
+      | null logs -> maybe (Left "mandatory paramaters are missing")  Right
+                     (k <$> callback <*>
+                      mode <*>
+                      topic <*>
+                      verify <*>
+                      pure leaseSeconds <*>
+                      pure secret <*>
+                      pure verifyToken <*>
+                      pure a)
+      | otherwise  -> Left logs
 
-parseSubParams :: MonadError HubError m => [(S.Text, S.Text)] -> m SubParams
+parseSubParams :: [(S.Text, S.Text)] -> Either String SubParams
 parseSubParams xs =
-    either (throwError . ParseError . T.fromStrict) return $ evalParamParser mkHubRequest (traverse_ go xs) init_state
+  evalParamParser mkHubRequest (traverse_ go xs) init_state
         where
           init_state = RS Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
           mkHubRequest callback mode topic verify leaseSeconds secret verifyToken _ =
               SubParams callback mode topic verify leaseSeconds secret verifyToken
 
-          go ("hub.callback", url)        = maybe (setCallback url) (log . S.append "error on hub.callback parameter") (validateUrl url)
+          go ("hub.callback", url) =
+            maybe (setCallback url)
+                    (log . (++ "error on hub.callback parameter"))
+                    (validateUrl url)
           go ("hub.mode", mode)           = setMode mode
-          go ("hub.topic",url)            = maybe (setTopic url) (log . S.append "error on hub.topic parameter") (validateUrl url)
+          go ("hub.topic",url)            =
+            maybe (setTopic url)
+                    (log . (++ "error on hub.topic parameter"))
+                    (validateUrl url)
           go ("hub.verify", verify)       = addVerifyParam verify
-          go ("hub.lease_seconds", lease) = maybe (return ()) setLeaseSeconds (validateLeaseSeconds lease)
+          go ("hub.lease_seconds", lease) =
+            maybe (return ())
+                  setLeaseSeconds
+                  (validateLeaseSeconds lease)
           go ("hub.secret", secret)       = setSecret secret
           go ("hub.verify_token", token)  = setVerifyToken token
           go param                        = return ()
 
-validateUrl :: (Stream s Identity Char, IsString s) => s -> Maybe s
-validateUrl input = either (Just . fromString . show) (const Nothing) (parse parser "" input *> pure ())
+validateUrl :: (Stream s Identity Char, IsString s) => s -> Maybe String
+validateUrl input = 
+  either (Just . fromString . show) 
+           (const Nothing) 
+           (parse parser "" input *> pure ())
   where
     parser = do
       string "http" <?> "http/https protocol"
@@ -111,7 +132,7 @@ validateUrl input = either (Just . fromString . show) (const Nothing) (parse par
       some (alphaNum <|> oneOf "-_?/&.:") <?> "no strange symbol in a url"
       eof
 
-validateLeaseSeconds :: (Stream s Identity Char, IsString s) => s -> Maybe Int
+validateLeaseSeconds :: S.Text -> Maybe Int
 validateLeaseSeconds input = either (const Nothing) (Just . read) (parse parser "" input)
     where
       parser = do digits <- some digit

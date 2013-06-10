@@ -58,18 +58,18 @@ main = do
       go _    "publish"     = publish
       go _ _                = Scotty.status status404
 
-asyncQueueMain :: (CanReport m, MonadIO m) => m ()
+asyncQueueMain :: IO ()
 asyncQueueMain = eventLoop fetching
-                 (\o s -> runEitherT $ updateSubFigures o s)
-                 (\o s -> runEitherT $ confirmUnsub o s)
-                 (distribute)
+                 updateSubFigures
+                 confirmUnsub
+                 distribute
   where
     fetching opts bytes =
       do res  <- fetchContent (unpack bytes)
-         unwrapMonad $ traverse_ (WrapMonad . runEitherT . process opts) res
+         unwrapMonad $ traverse_ (WrapMonad . process opts) res
 
     process opts feed =
-      do time <- liftIO getCurrentTime
+      do time <- getCurrentTime
          withSqliteConnection (saveFetchedFeed time feed (hubDbOpts opts))
                                 (hubDbOpts opts)
          executeRedis $ publishFeed feed
@@ -78,8 +78,8 @@ asyncQueueMain = eventLoop fetching
       let dbOpts = hubDbOpts opts
           prod   = runSqliteStmt (loadSubs (feedId feed))
           action = prod dbOpts $$ printer in
-      do liftIO $ print (feedId feed)
-         liftIO $ runResourceT action
+      do print (feedId feed)
+         runResourceT action
 
 errorHandle :: HubError -> Hub Scotty.ActionM ()
 errorHandle (BadRequest e)     = status status400 >> text e
@@ -89,27 +89,31 @@ errorHandle (InternalError e)  = status status500
 
 subscription :: (Start v, Pending v, ToValue v, Ended v w, Verification v
                 , Async (Sub v), Verification w)
-             => (forall m. (MonadIO m, MonadError HubError m) => HubOpts -> Sub w -> m a)
+             => (HubOpts -> Sub w -> IO (Either String a))
              -> Hub Scotty.ActionM ()
 subscription whenVerified = do
-  opts   <- ask
-  xs     <- params
-  report <- runEitherT $ process opts $ fmap (T.toStrict *** T.toStrict) xs
-  either errorHandle status report
+  opts <- ask
+  xs   <- params
+  go opts (fmap (T.toStrict *** T.toStrict) xs)
     where
-      process opts params = do request <- parseSubParams params
-                               sub     <- makeSub start request
-                               let callback = encodeUtf8 (subCallback request)
-                                   topic    = encodeUtf8 (subTopic request)
-                               executeRedis $ saveSubscription sub
-                               result  <- verification sub
-                               case result of
-                                 (status, verifiedSub) ->
-                                   traverse_ (whenVerified opts) verifiedSub >>
-                                           return status
-      logParams params =
-        "\nSubscription handler\n" ++
-        foldMap (\(p, v) -> (show p) ++ ": " ++ (show v) ++ "\n") params
+      go opts params =
+        let action          = traverse afterParse (parseSubParams params)
+            internalError _ = status status500
+            badRequest e    = status status400 >> text (fromString e)
+
+            verifying sub _ =
+              do (s, vsub) <- liftIO $ verification sub
+                 res       <- traverse (liftIO . whenVerified opts) vsub
+                 maybe (status s)
+                         (either internalError (const $ status s))
+                         res
+
+            afterParse request =
+              do sub <- makeSub start request
+                 res <- liftIO $ executeRedis $ saveSubscription sub
+                 either internalError (verifying sub) res
+
+        in either badRequest return =<< action
 
 publish :: Scotty.ActionM ()
 publish = do
@@ -121,27 +125,27 @@ publish = do
             let persist (Just pub) = unitRedis $
                                      pushPublishQueue pub
                 persist _          = returnRedis ()
-            result <- runEitherT $ executeRedis $
-                      bindRedis persist (validatePublishRequest url)
+            res <- liftIO $ executeRedis $
+                   bindRedis persist (validatePublishRequest url)
             either (const $ Scotty.status status500)
-                     (const (Scotty.status status204)) result
+                     (const (Scotty.status status204)) res
 
-verification :: (MonadIO m, MonadError HubError m, Applicative m
-                , Pending v, ToValue v, Async (Sub v), Ended v w, Verification w)
+verification :: (Pending v, ToValue v, Async (Sub v)
+                , Ended v w, Verification w)
              => Sub v
-             -> m (Status, Maybe (Sub w))
+             -> IO (Status, Maybe (Sub w))
 verification sub = go $ subVerify $ subParams $ subInfos sub
   where
-    go ("async":_) = executeRedis (pushAsyncSubRequest sub) >>
-                     return (status202, Nothing)
+    go ("async":_) =
+      fmap
+      (either (\_ -> (status500, Nothing)) (\_ -> (status202, Nothing)))
+      (executeRedis (pushAsyncSubRequest sub))
+
     go ("sync":_)  = verify sub
     go (_:xs)      = go xs
-    go []          = throwError $ BadRequest "Unsupported verification mode"
+    go []          = return (status400, Nothing)
 
-updateSubFigures :: (MonadIO m, MonadError HubError m)
-                 => HubOpts
-                 -> Sub Verified
-                 -> m ()
+updateSubFigures :: HubOpts -> Sub Verified -> IO (Either String ())
 updateSubFigures opts sub@(Sub _ (SubInfos _ params _)) =
   let encodedTopic = encodeUtf8 $ subTopic params
       dbOpts = hubDbOpts opts
@@ -157,10 +161,7 @@ updateSubFigures opts sub@(Sub _ (SubInfos _ params _)) =
   in do executeRedis $ action sub
         withSqliteConnection registration dbOpts
 
-confirmUnsub :: (MonadIO m, MonadError HubError m)
-             => HubOpts
-             -> Sub (Deletion Verified)
-             -> m ()
+confirmUnsub :: HubOpts -> Sub (Deletion Verified) -> IO (Either String ())
 confirmUnsub opts sub =
   let dbOpts = hubDbOpts opts in
   (executeRedis $ saveSubscription sub) >>

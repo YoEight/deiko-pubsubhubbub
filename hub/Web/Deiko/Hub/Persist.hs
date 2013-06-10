@@ -49,7 +49,7 @@ import           Text.Deiko.Config          (CanReport, Config, getValue,
                                              loadConfig)
 import           Text.XML.Light             (parseXMLDoc, showElement)
 
-loadDbOpts :: (MonadIO m, CanReport m) => m DbOpts
+loadDbOpts :: (CanReport m, MonadIO m) => m DbOpts
 loadDbOpts = do
   config      <- loadConfig "conf/db.conf"
   location    <- getValue "db.name" config
@@ -60,21 +60,16 @@ loadDbOpts = do
   getSubTopic <- getValue "db.queries.sub-topic" config
   return (DbOpts location getFeedId insertSub insertFeed deleteSub getSubTopic)
 
-executeRedis :: (MonadIO m, MonadError HubError m)
-             => Redis (Either Reply a)
-             -> m a
-executeRedis action = do
-  result <- liftIO $
-            connect defaultConnectInfo >>=
-                        (flip runRedis $ action)
-  either (throwError . InternalError . fromString . show) return result
+executeRedis :: Redis a -> IO a
+executeRedis action =
+  connect defaultConnectInfo >>= \cnx ->
+    runRedis cnx action
 
-eventLoop :: (CanReport m, MonadIO m)
-          => (forall n. MonadIO n => HubOpts -> B.ByteString -> n a)
-          -> (forall n. MonadIO n => HubOpts -> Sub Verified -> n b)
-          -> (forall n. MonadIO n => HubOpts -> Sub (Deletion Verified) -> n c)
-          -> (forall n. MonadIO n => HubOpts -> Feed -> n d)
-          -> m ()
+eventLoop :: (HubOpts -> B.ByteString -> IO a)
+          -> (HubOpts -> Sub Verified -> IO b)
+          -> (HubOpts -> Sub (Deletion Verified) -> IO c)
+          -> (HubOpts -> Feed -> IO d)
+          -> IO ()
 eventLoop onPublish onSub onDel onFetch = do
   opts <- loadDbOpts
   liftIO $
@@ -138,12 +133,9 @@ pushPublishQueue (Pub _ (PubInfos url _ _)) =
 publishFeed :: RedisCtx m f => Feed -> m (f Integer)
 publishFeed feed = publish "fetched" (pack $ feedId $ feed)
 
-withSqliteConnection :: (MonadIO m, MonadError HubError m)
-                     => (SQLiteHandle -> m ())
-                     -> DbOpts
-                     -> m ()
+withSqliteConnection :: (SQLiteHandle -> IO a) -> DbOpts -> IO a
 withSqliteConnection f opts = do
-  handle   <- liftIO $ openConnection (dbLocation opts)
+  handle   <- openConnection (dbLocation opts)
   a        <- f handle
   liftIO $ closeConnection handle
   return a
@@ -167,19 +159,18 @@ loadSubs topic opts handle = do
 printer :: (Show a, MonadIO m) => Consumer a m ()
 printer = awaitForever (liftIO . print)
 
-sqliteExecParamStmt_ :: (MonadIO m, MonadError HubError m)
-                     => String
+sqliteExecParamStmt_ :: String
                      -> [(String, Value)]
-                     -> (SQLiteHandle -> m ())
+                     -> (SQLiteHandle -> IO (Either String ()))
 sqliteExecParamStmt_ query params handle =
-  go =<< (liftIO $ execParamStatement_ handle query params)
+  go =<< execParamStatement_ handle query params
     where
-      go = maybe (return ()) (throwError . InternalError . fromString)
+      go = return . maybe (Right ()) Left
 
-unregisterSub :: (MonadIO m, MonadError HubError m, Ended v w)
+unregisterSub :: Ended v w
               => DbOpts
               -> Sub w
-              -> (SQLiteHandle -> m ())
+              -> (SQLiteHandle -> IO (Either String ()))
 unregisterSub opts sub handle =
   let query = dbDeleteSubQuery opts in
   sqliteExecParamStmt_ query
@@ -191,10 +182,10 @@ deleteSubParams (SubParams cb _ topic _ _ _ _) =
   [(":topic", Blob $ encodeUtf8 topic)
   ,(":callback", Blob $ encodeUtf8 cb)]
 
-registerSub :: (MonadIO m, MonadError HubError m, Ended v w)
+registerSub :: Ended v w
             => DbOpts
             -> Sub w
-            -> (SQLiteHandle -> m ())
+            -> (SQLiteHandle -> IO (Either String ()))
 registerSub opts sub handle =
   let query = dbInsertSubQuery opts in
   sqliteExecParamStmt_ query
@@ -211,11 +202,10 @@ registerSubParams (SubParams cb _ topic _ lease secr _) =
     secret = maybe Null (Blob . encodeUtf8) secr
     lease0 = maybe Null (Int . fromIntegral) lease
 
-saveFetchedFeed :: (MonadIO m, MonadError HubError m)
-                => UTCTime
+saveFetchedFeed :: UTCTime
                 -> Feed
                 -> DbOpts
-                -> (SQLiteHandle -> m ())
+                -> (SQLiteHandle -> IO (Either String ()))
 saveFetchedFeed time feed opts handle =
   let query = dbInsertFeedQuery opts in
   sqliteExecParamStmt_ query (feedParams time feed) handle
