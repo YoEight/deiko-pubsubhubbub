@@ -65,11 +65,6 @@ data Sub a where
 data Pub a where
     Pub :: Publishing p => p -> PubInfos -> Pub p
 
-data HubError = BadRequest T.Text
-              | VerificationFailed
-              | ParseError T.Text
-              | InternalError T.Text deriving (Eq, Show)
-
 data DbOpts = DbOpts { dbLocation        :: String
                      , dbFeedByIdQuery   :: String
                      , dbInsertSubQuery  :: String

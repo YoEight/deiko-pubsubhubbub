@@ -81,12 +81,6 @@ asyncQueueMain = eventLoop fetching
       do print (feedId feed)
          runResourceT action
 
-errorHandle :: HubError -> Hub Scotty.ActionM ()
-errorHandle (BadRequest e)     = status status400 >> text e
-errorHandle VerificationFailed = status status400 >> text "Verification failed"
-errorHandle (ParseError e)     = status status400 >> text e
-errorHandle (InternalError e)  = status status500
-
 subscription :: (Start v, Pending v, ToValue v, Ended v w, Verification v
                 , Async (Sub v), Verification w)
              => (HubOpts -> Sub w -> IO (Either String a))
