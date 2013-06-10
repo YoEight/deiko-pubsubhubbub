@@ -6,7 +6,6 @@
 
 module Main (main, asyncQueueMain) where
 
-import           Web.Deiko.Hub
 import           Web.Deiko.Hub.Http         (fetchContent, verify)
 import           Web.Deiko.Hub.Parse
 import           Web.Deiko.Hub.Persist
@@ -44,19 +43,26 @@ import           System.Log.Logger
 import           Text.Atom.Feed             (Feed (..))
 import           Text.Deiko.Config          (CanReport (..), ConfigError (..))
 
-import qualified Web.Scotty                 as Scotty
+import           Web.Scotty
 
 main = do
   opts <- loadDbOpts
-  Scotty.scotty 3000 $
-       Scotty.post "/hub" $ go (HubOpts opts) =<< Scotty.param "hub.mode"
+  scotty 3000 $
+         post "/hub" $ go (HubOpts opts) =<< param "hub.mode"
 
     where
-      go :: HubOpts -> B.ByteString -> Scotty.ActionM ()
-      go opts "subscribe"   = evalHub (subscription updateSubFigures) opts
-      go opts "unsubscribe" = evalHub (subscription confirmUnsub) opts
+      go :: HubOpts -> B.ByteString -> ActionM ()
+      go opts "subscribe"   = subHandler updateSubFigures opts
+      go opts "unsubscribe" = subHandler confirmUnsub opts
       go _    "publish"     = publish
-      go _ _                = Scotty.status status404
+      go _ _                = status status404
+
+      subHandler f opts = do
+         xs       <- params
+         (s, msg) <- liftIO $ subscription
+                     f opts (fmap (T.toStrict *** T.toStrict) xs)
+         status s
+         unwrapMonad $ traverse_ (WrapMonad . text . fromString) msg
 
 asyncQueueMain :: IO ()
 asyncQueueMain = eventLoop fetching
@@ -84,36 +90,34 @@ asyncQueueMain = eventLoop fetching
 subscription :: (Start v, Pending v, ToValue v, Ended v w, Verification v
                 , Async (Sub v), Verification w)
              => (HubOpts -> Sub w -> IO (Either String a))
-             -> Hub Scotty.ActionM ()
-subscription whenVerified = do
-  opts <- ask
-  xs   <- params
-  go opts (fmap (T.toStrict *** T.toStrict) xs)
-    where
-      go opts params =
-        let action          = traverse afterParse (parseSubParams params)
-            internalError _ = status status500
-            badRequest e    = status status400 >> text (fromString e)
+             -> HubOpts
+             -> [(S.Text, S.Text)]
+             -> IO (Status, Maybe String)
+subscription callback opts params =
+  let action          = traverse afterParse (parseSubParams params)
+      internalError _ = return (status500, Nothing)
+      badRequest e    = return (status400, Just e)
+      simple s        = return (s, Nothing)
 
-            verifying sub _ =
-              do (s, vsub) <- liftIO $ verification sub
-                 res       <- traverse (liftIO . whenVerified opts) vsub
-                 maybe (status s)
-                         (either internalError (const $ status s))
-                         res
+      verifying sub _ =
+        do (s, vsub) <- verification sub
+           res       <- traverse (callback opts) vsub
+           maybe (simple s)
+                   (either internalError (const $ simple s))
+                   res
 
-            afterParse request =
-              do sub <- makeSub start request
-                 res <- liftIO $ executeRedis $ saveSubscription sub
-                 either internalError (verifying sub) res
+      afterParse request =
+        do sub <- makeSub start request
+           res <- executeRedis $ saveSubscription sub
+           either internalError (verifying sub) res
 
-        in either badRequest return =<< action
+  in either badRequest return =<< action
 
-publish :: Scotty.ActionM ()
+publish :: ActionM ()
 publish = do
-  url  <- Scotty.param "hub.url"
+  url  <- param "hub.url"
   maybe (persistPublishRequest (T.toStrict url))
-          (const $ Scotty.status status400) (validateUrl url)
+          (const $ status status400) (validateUrl url)
     where
       persistPublishRequest url = do
             let persist (Just pub) = unitRedis $
@@ -121,8 +125,8 @@ publish = do
                 persist _          = returnRedis ()
             res <- liftIO $ executeRedis $
                    bindRedis persist (validatePublishRequest url)
-            either (const $ Scotty.status status500)
-                     (const (Scotty.status status204)) res
+            either (const $ status status500)
+                     (const (status status204)) res
 
 verification :: (Pending v, ToValue v, Async (Sub v)
                 , Ended v w, Verification w)

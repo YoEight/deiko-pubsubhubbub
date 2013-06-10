@@ -8,7 +8,7 @@
 
 module Web.Deiko.Hub.Types where
 
-import           Prelude              hiding (empty, lookup, singleton)
+import           Prelude              hiding (lookup)
 
 import           Control.Applicative  (Applicative, (<$>))
 import           Control.Monad        (liftM)
@@ -27,7 +27,6 @@ import           Data.Foldable        (foldMap)
 import           Data.Hashable
 import           Data.Int
 import           Data.Monoid
-import           Data.Sequence        (Seq, empty, singleton, (|>))
 import           Data.String          (IsString (..))
 import qualified Data.Text            as S
 import           Data.Text.Encoding   (encodeUtf8)
@@ -81,14 +80,6 @@ instance Show a => Show (Sub a) where
 
 instance Show a => Show (Pub a) where
     show (Pub state url) = mconcat ["Pub ", show state, show url]
-
-newtype Hub m a = Hub {
-    unHub :: ReaderT HubOpts (StateT (Seq HubEvent) m) a
-  } deriving (Functor, Applicative, Monad, MonadReader HubOpts
-             , MonadState (Seq HubEvent), MonadIO)
-
-instance MonadTrans Hub where
-  lift = lift
 
 class Verification a
 class Publishing a
@@ -272,9 +263,3 @@ makeSub :: (MonadIO m, Verification v)
 makeSub v params = liftM ((Sub v) . (SubInfos 1 params)) currentTime
   where
     currentTime = liftIO getCurrentTime
-
-logEvent :: Monad m => HubEvent -> Hub m ()
-logEvent = modify . flip (|>)
-
-emptyEvents :: Seq HubEvent
-emptyEvents = empty

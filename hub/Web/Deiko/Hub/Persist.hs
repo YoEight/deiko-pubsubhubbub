@@ -5,7 +5,6 @@
 
 module Web.Deiko.Hub.Persist where
 
-import           Web.Deiko.Hub              ()
 import           Web.Deiko.Hub.Http         (verify)
 import           Web.Deiko.Hub.Parse        (validateUrl)
 import           Web.Deiko.Hub.Types
