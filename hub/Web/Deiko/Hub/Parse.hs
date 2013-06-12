@@ -1,129 +1,153 @@
 {-# LANGUAGE FlexibleContexts           #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE OverloadedStrings          #-}
 
-module Web.Deiko.Hub.Parse (parseSubParams, validateUrl) where
+module Web.Deiko.Hub.Parse (parseSubParams, validateUrl, MapError(..)) where
 
-import           Prelude                                  hiding (log)
-
-import           Control.Applicative
-import           Control.Monad
-import           Control.Monad.Error.Class
-import           Control.Monad.RWS
+import           Control.Applicative                      hiding (optional)
 import           Data.Functor.Identity
 
 import           Web.Deiko.Hub.Types
 
-import qualified Data.ByteString.Lazy                     as B
 import           Data.Foldable
-import           Data.Monoid
-import qualified Data.Sequence                            as SS
+import qualified Data.Map                                 as M
 import           Data.String
 import qualified Data.Text                                as S
 import qualified Data.Text.Lazy                           as T
 
-import           Text.Parsec.ByteString
 import           Text.Parsec.Prim                         hiding ((<|>))
 import           Text.Parsec.Text
-import           Text.Parsec.Text.Lazy
 import           Text.ParserCombinators.Parsec.Char
-import           Text.ParserCombinators.Parsec.Combinator
+import           Text.ParserCombinators.Parsec.Combinator hiding (optional)
 import           Text.ParserCombinators.Parsec.Prim       hiding (label, (<|>))
 
-data ReqState = RS { srsCallback     :: Maybe S.Text
-                   , srsMode         :: Maybe S.Text
-                   , srsTopic        :: Maybe S.Text
-                   , srsVerify       :: Maybe [S.Text]
-                   , srsLeaseSeconds :: Maybe Int
-                   , srsSecret       :: Maybe S.Text
-                   , srsVerifyToken  :: Maybe S.Text }
+data Param = Single S.Text
+           | Multiple [S.Text]
 
-newtype Chariot = Chariot { unChariot :: String }
+data MapError = MError { errKey :: S.Text
+                       , errMsg :: S.Text }
 
-newtype ParamParser a = ParamParser { runParamParser :: RWS () Chariot ReqState a }
-    deriving (Monad, MonadState ReqState, MonadWriter Chariot, Functor, Applicative)
+newtype Mapping a =
+  Mapping { runMapping :: M.Map S.Text Param -> Either [MapError] a }
 
-instance Monoid Chariot where
-    mempty  = Chariot mempty
-    mappend (Chariot l) (Chariot r)
-      | null l && null r = Chariot ""
-      | null l           = Chariot r
-      | null r           = Chariot l
-      | otherwise        = Chariot (l ++ "\n" ++ r)
+instance Functor Mapping where
+  fmap f (Mapping k) = Mapping $ \m ->
+                         either Left (Right . f) (k m)
 
-setCallback, setMode, setTopic, setSecret, setVerifyToken, addVerifyParam :: S.Text -> ParamParser ()
+instance Applicative Mapping where
+  pure a = Mapping (\_ -> Right a)
 
-setCallback t = modify $ \s -> s{srsCallback=Just t}
+  Mapping kf <*> Mapping ka =
+    Mapping $ \m ->
+      case (kf m, ka m) of
+        (Left xs, Left vs) -> Left (xs ++ vs)
+        (Right f, Right a) -> Right (f a)
+        (Left xs, _)       -> Left xs
+        (_, Left xs)       -> Left xs
 
-setMode t = modify $ \s -> s{srsMode=Just t}
+parseSubParams :: [(S.Text, S.Text)] -> Either [MapError] SubParams
+parseSubParams = runMapping subParamsMapping . combineParams
 
-setTopic t = modify $ \s -> s{srsTopic=Just t}
+subParamsMapping :: Mapping SubParams
+subParamsMapping =
+  SubParams <$>
+  text "hub.callback" <*>
+  text "hub.mode" <*>
+  text "hub.topic" <*>
+  texts "hub.verify" <*>
+  optional (integer "hub.lease_seconds") <*>
+  optional (text "hub.secret") <*>
+  optional (text "hub.verify_token")
 
-setSecret t = modify $ \s -> s{srsSecret=Just t}
+keyof :: S.Text
+      -> (S.Text -> M.Map S.Text Param -> Either [MapError] a)
+      -> Mapping a
+keyof key k = Mapping (k key)
 
-setVerifyToken t = modify $ \s -> s{srsVerifyToken=Just t}
+optional :: Mapping a -> Mapping (Maybe a)
+optional (Mapping k) =
+  Mapping $ \m ->
+    either (\_ -> Right Nothing) (Right . Just) (k m)
 
-setLeaseSeconds :: Int -> ParamParser ()
-setLeaseSeconds i = modify $ \s -> s{srsLeaseSeconds=Just i}
+text :: S.Text -> Mapping S.Text
+text key = keyof key text_k
 
-addVerifyParam param = modify go
-    where
-      go s@(RS{srsVerify=Nothing}) = s{srsVerify=Just [param]}
-      go s@(RS{srsVerify=Just xs}) = s{srsVerify=Just $ mconcat [xs, [param]]}
+texts :: S.Text -> Mapping [S.Text]
+texts key = keyof key (presence_k (multiple_k go))
+  where
+    go _ xs = Right xs
 
-log :: String -> ParamParser ()
-log = tell . Chariot
+url :: S.Text -> Mapping S.Text
+url key = keyof key url_k
 
-evalParamParser :: (S.Text -> S.Text -> S.Text -> [S.Text] -> Maybe Int -> Maybe S.Text -> Maybe S.Text -> a -> b)
-                -> ParamParser a
-                -> ReqState
-                -> Either String b
-evalParamParser k (ParamParser p) s =
-  case runRWS p () s of
-    (a, (RS callback mode topic verify leaseSeconds secret verifyToken), (Chariot logs))
-      | null logs -> maybe (Left "mandatory paramaters are missing")  Right
-                     (k <$> callback <*>
-                      mode <*>
-                      topic <*>
-                      verify <*>
-                      pure leaseSeconds <*>
-                      pure secret <*>
-                      pure verifyToken <*>
-                      pure a)
-      | otherwise  -> Left logs
+integer :: S.Text -> Mapping Integer
+integer key = keyof key integer_k
 
-parseSubParams :: [(S.Text, S.Text)] -> Either String SubParams
-parseSubParams xs =
-  evalParamParser mkHubRequest (traverse_ go xs) init_state
-        where
-          init_state = RS Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+text_k :: S.Text
+       -> M.Map S.Text Param
+       -> Either [MapError] S.Text
+text_k =
+  presence_k (single_k go)
+  where
+    go _ x = Right x
 
-          mkHubRequest callback mode topic verify leaseSeconds secret verifyToken _ =
-              SubParams callback mode topic verify leaseSeconds secret verifyToken
+url_k :: S.Text
+      -> M.Map S.Text Param
+      -> Either [MapError] S.Text
+url_k =
+  presence_k (single_k go)
+  where
+    go key x = maybe (Right x) (mapError key) (validateUrl x)
 
-          go ("hub.callback", url) =
-            maybe (setCallback url)
-                    (log . (++ "error on hub.callback parameter"))
-                    (validateUrl url)
-          go ("hub.mode", mode)           = setMode mode
-          go ("hub.topic",url)            =
-            maybe (setTopic url)
-                    (log . (++ "error on hub.topic parameter"))
-                    (validateUrl url)
-          go ("hub.verify", verify)       = addVerifyParam verify
-          go ("hub.lease_seconds", lease) =
-            maybe (return ())
-                  setLeaseSeconds
-                  (validateLeaseSeconds lease)
-          go ("hub.secret", secret)       = setSecret secret
-          go ("hub.verify_token", token)  = setVerifyToken token
-          go param                        = return ()
+integer_k :: S.Text
+          -> M.Map S.Text Param
+          -> Either [MapError] Integer
+integer_k =
+  presence_k (single_k go)
+  where
+    go key x =
+      either (mapError key) Right (validateInt x)
 
-validateUrl :: (Stream s Identity Char, IsString s) => s -> Maybe String
-validateUrl input = 
-  either (Just . fromString . show) 
-           (const Nothing) 
+presence_k :: (S.Text -> Param -> Either [MapError] a)
+           -> S.Text
+           -> M.Map S.Text Param
+           -> Either [MapError] a
+presence_k k key m =
+  maybe (presence_msg key) (k key) (M.lookup key m)
+
+single_k :: (S.Text -> S.Text -> Either [MapError] a)
+         -> S.Text
+         -> Param
+         -> Either [MapError] a
+single_k k key (Single x) = k key x
+single_k k key (Multiple _) =
+  mapError key "is multiple. expected a single value"
+
+multiple_k :: (S.Text -> [S.Text] -> Either [MapError] a)
+           -> S.Text
+           -> Param
+           -> Either [MapError] a
+multiple_k k key (Single x)    = k key [x]
+multiple_k k key (Multiple xs) = k key xs
+
+presence_msg :: S.Text -> Either [MapError] b
+presence_msg key = mapError key "is not present"
+
+mapError :: S.Text -> S.Text -> Either [MapError] b
+mapError key msg = Left [MError key msg]
+
+combineParams :: [(S.Text, S.Text)] -> M.Map S.Text Param
+combineParams xs =
+  let toParam (k, v) = (k, Single v)
+      combine (Single x) (Single y)    = Multiple [x, y]
+      combine (Single x) (Multiple xs) = Multiple (x:xs) in
+  M.fromListWith combine (fmap toParam xs)
+
+validateUrl :: (Stream s Identity Char, IsString s, IsString ss)
+            => s
+            -> Maybe ss
+validateUrl input =
+  either (Just . fromString . show)
+           (const Nothing)
            (parse parser "" input *> pure ())
   where
     parser = do
@@ -131,6 +155,20 @@ validateUrl input =
       string "s://" <|> string "://"
       some (alphaNum <|> oneOf "-_?/&.:") <?> "no strange symbol in a url"
       eof
+
+validateInt :: (Stream s Identity Char, IsString s, IsString ss)
+            => s
+            -> Either ss Integer
+validateInt input =
+  either (Left . fromString . show)
+         (Right . read)
+         (parse go "" input)
+  where
+    go = do x  <- char '0' <|> digit
+            xs <- many1 (oneOf "123456789") <|> pure []
+            eof
+            return (x:xs)
+
 
 validateLeaseSeconds :: S.Text -> Maybe Int
 validateLeaseSeconds input = either (const Nothing) (Just . read) (parse parser "" input)

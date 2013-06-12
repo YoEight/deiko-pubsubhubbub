@@ -46,7 +46,7 @@ data SubParams = SubParams { subCallback     :: S.Text
                            , subMode         :: S.Text
                            , subTopic        :: S.Text
                            , subVerify       :: [S.Text]
-                           , subLeaseSeconds :: Maybe Int
+                           , subLeaseSeconds :: Maybe Integer
                            , subSecret       :: Maybe S.Text
                            , subVerifyToken  :: Maybe S.Text } deriving Show
 
@@ -229,7 +229,7 @@ instance FromBson SubParams where
       return $ SubParams  callback mode topic verify (leaseSeconds doc)
                  (secret doc) (verifyToken doc)
         where
-          leaseSeconds :: Document -> Maybe Int
+          leaseSeconds :: Document -> Maybe Integer
           leaseSeconds = lookup "hub.lease_seconds"
 
           secret, verifyToken :: Document -> Maybe S.Text

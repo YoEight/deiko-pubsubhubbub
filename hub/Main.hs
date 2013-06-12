@@ -62,7 +62,7 @@ main = do
          (s, msg) <- liftIO $ subscription
                      f opts (fmap (T.toStrict *** T.toStrict) xs)
          status s
-         unwrapMonad $ traverse_ (WrapMonad . text . fromString) msg
+         unwrapMonad $ traverse_ (WrapMonad . text) msg
 
 asyncQueueMain :: IO ()
 asyncQueueMain = eventLoop fetching
@@ -92,12 +92,15 @@ subscription :: (Start v, Pending v, ToValue v, Ended v w, Verification v
              => (HubOpts -> Sub w -> IO (Either String a))
              -> HubOpts
              -> [(S.Text, S.Text)]
-             -> IO (Status, Maybe String)
+             -> IO (Status, Maybe T.Text)
 subscription callback opts params =
   let action          = traverse afterParse (parseSubParams params)
       internalError _ = return (status500, Nothing)
-      badRequest e    = return (status400, Just e)
+      badRequest e    = return (status400, Just $ formatError e)
       simple s        = return (s, Nothing)
+
+      formatError =
+        T.fromStrict . foldMap (\(MError key msg) -> key <> ": " <> msg <> "\n")
 
       verifying sub _ =
         do (s, vsub) <- verification sub
