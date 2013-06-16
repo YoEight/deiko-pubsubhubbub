@@ -16,6 +16,7 @@ import qualified Data.Text.Lazy                           as T
 
 import           Text.Parsec.Prim                         hiding ((<|>))
 import           Text.Parsec.Text
+import           Text.Parsec.Text.Lazy
 import           Text.ParserCombinators.Parsec.Char
 import           Text.ParserCombinators.Parsec.Combinator hiding (optional)
 import           Text.ParserCombinators.Parsec.Prim       hiding (label, (<|>))
@@ -50,9 +51,9 @@ parseSubParams = runMapping subParamsMapping . combineParams
 subParamsMapping :: Mapping SubParams
 subParamsMapping =
   SubParams <$>
-  text "hub.callback" <*>
+  url "hub.callback" <*>
   text "hub.mode" <*>
-  text "hub.topic" <*>
+  url "hub.topic" <*>
   texts "hub.verify" <*>
   optional (integer "hub.lease_seconds") <*>
   optional (text "hub.secret") <*>
