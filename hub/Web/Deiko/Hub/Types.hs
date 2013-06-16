@@ -73,8 +73,22 @@ data DbOpts = DbOpts { dbLocation        :: String
 
 data HubOpts = HubOpts { hubDbOpts :: DbOpts }
 
-data HubEvent = HubEvent
+type Mode = S.Text
+type Params = [(S.Text, S.Text)]
+type Url = S.Text
 
+data Subscription
+data Distribution
+
+data Event a where
+  NoEvent :: Event a
+  InternalError :: S.Text -> Event a
+  ClientError :: S.Text -> Event a
+  SubRequest :: Mode -> Params -> Event Subscription -> Event Subscription
+  Validated :: Event Subscription -> Event Subscription
+  Publish :: Params -> Event Distribution -> Event Distribution
+  Retrieved :: Url -> Event Distribution -> Event Distribution 
+               
 instance Show a => Show (Sub a) where
     show (Sub state infos) = mconcat ["Sub ", show state, show infos]
 
@@ -252,6 +266,17 @@ instance (FromValue p, Publishing p) => FromBson (Pub p) where
        version <- lookup "version" doc
        date    <- lookup "date" doc
        return $ Pub state $ PubInfos url version date
+
+instance Monoid (Event a) where
+  mempty = NoEvent
+
+  mappend NoEvent e             = e
+  mappend e@(InternalError _) _ = e
+  mappend e@(ClientError _) _   = e
+  mappend (SubRequest n p i) v  = SubRequest n p (mappend i v)
+  mappend (Validated e) v       = Validated (mappend e v)
+  mappend (Publish p e) v       = Publish p (mappend e v)
+  mappend (Retrieved u e) v     = Retrieved u (mappend e v)
 
 subInfos :: Sub v -> SubInfos
 subInfos (Sub _ infos) = infos
