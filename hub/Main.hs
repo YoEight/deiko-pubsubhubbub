@@ -35,11 +35,6 @@ import           Data.Traversable           (traverse)
 
 import           Network.HTTP.Types.Status
 
-import           System.Log.Formatter
-import           System.Log.Handler         hiding (setLevel)
-import           System.Log.Handler.Simple
-import           System.Log.Logger
-
 import           Text.Atom.Feed             (Feed (..))
 import           Text.Deiko.Config          (CanReport (..), ConfigError (..))
 
