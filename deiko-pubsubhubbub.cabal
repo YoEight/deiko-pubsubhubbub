@@ -72,6 +72,7 @@ library
                  , monad-logger                  >= 0.3
                  , fast-logger                   >= 0.3
                  , semigroups                    >= 0.8        && < 0.10
+                 , parsec
 
 executable         deiko-pubsubhubbub
     if flag(library-only)

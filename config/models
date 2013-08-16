@@ -8,5 +8,13 @@ Email
     user UserId Maybe
     verkey Text Maybe
     UniqueEmail email
+Sub
+	callback Text
+	topic Text
+	verify Text
+	leaseSeconds Int Maybe
+	secret Text Maybe
+	verifyToken Text Maybe
+	verified Bool
 
  -- By default this file is used in Model.hs (which is imported by Foundation.hs)
