@@ -2,6 +2,7 @@ module Model where
 
 import Prelude
 import Yesod
+import Data.Time.Clock
 import Data.Text (Text)
 import Database.Persist.Quasi
 import Data.Typeable (Typeable)

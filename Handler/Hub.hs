@@ -9,7 +9,7 @@ import qualified Data.ByteString as B
 import Data.Char (isDigit)
 import Data.Conduit
 import Data.Foldable (foldMap)
-import Data.List.NonEmpty hiding (nonEmpty)
+import Data.List.NonEmpty hiding (nonEmpty, insert)
 import Data.Monoid (First(..))
 import qualified Data.Semigroup as S
 import Data.String (fromString)
@@ -24,6 +24,10 @@ import Text.ParserCombinators.Parsec.Prim hiding (label, (<|>))
 
 infixl 1 >>-
 infixl 1 -<<
+
+type SubFinal a = KeyBackend (PersistEntityBackend Sub) Sub
+                -> Sub 
+                -> Handler a
 
 data Validation e a = Failure (NonEmpty e)
                     | Success a
@@ -45,18 +49,45 @@ getHubR = do
   maybe (invalidArgs ["hub.mode has not be provided"]) decision modeOpt
 
 decision :: Text -> Handler Text
-decision "subscribe"   = subscription (error "todo")
+decision "subscribe"   = subscription onSubSuccess
 decision "unsubscribe" = unsubscription
 decision "publish"     = publish
 decision x             = invalidArgs ["unknown " <> x <> " for hub.mode"]
 
-subscription :: (Sub -> Handler Text) -> Handler Text
+subscription :: SubFinal a -> Handler Text
 subscription k = do
-  sub <- mkRequest
-  runDB $ insert_ sub
+  sub   <- mkRequest
+  subId <- runDB $ creationRoutine sub
   case subVerify sub of
     "async" -> processed
-    "sync"  -> verification sub
+    "sync"  -> verification sub >> k subId sub >> processed
+
+  where
+    creationRoutine sub =
+      let topic     = subTopic sub
+          cb        = subCallback sub 
+          onExist t = const (entityKey t) <$> replace (entityKey t) sub in do
+      res   <- selectFirst [SubTopic ==. topic, SubCallback ==. cb] []
+      subId <- maybe (insert sub) onExist res
+      date  <- liftIO getCurrentTime
+      insert_ (SubHist subId "creation" date)
+      return subId
+
+onSubSuccess :: SubFinal ()
+onSubSuccess subId sub = runDB action 
+  where
+    action = do
+      update subId [SubVerified =. True]
+      date <- liftIO getCurrentTime
+      insert_ (SubHist subId "verified" date)
+
+onUnsubSuccess :: SubFinal ()
+onUnsubSuccess subId sub = runDB action
+  where
+    action = do
+      update subId [SubActivated =. True]
+      date <- liftIO getCurrentTime
+      insert_ (SubHist subId "deleted" date)
 
 mkRequest :: Handler Sub
 mkRequest = do
@@ -77,7 +108,8 @@ mkRequest = do
       validateLease lease   <*>
       pure secret           <*>
       pure verifyTok        <*>
-      pure False
+      pure False            <*>
+      pure True
 
     action cb topic verify lease secret verifyTok =
       validation (invalidArgs . toList) return $
@@ -94,7 +126,7 @@ publish = error "publish not implemented yet"
 randomString :: MonadIO m => m Text
 randomString = return "challenge_test"
 
-verification :: Sub -> Handler Text
+verification :: Sub -> Handler ()
 verification sub = do
   challenge   <- randomString
   (Just mode) <- lookupGetParam "hub.mode"
@@ -116,13 +148,13 @@ verification sub = do
     handleResp req challenge manager =
       http req manager >>= \resp ->
         let validStatus s = status200 <= s && s < status300 
-            sink = checkChallengeSink (encodeUtf8 challenge) >>= \match ->
-                    if match 
-                      then return processed
-                      else return (invalidArgs ["Verification failded"]) in
+            sink =
+              let f x | x         = return ()
+                      | otherwise = verificationFailed in
+              fmap f (checkChallengeSink (encodeUtf8 challenge)) in
         case responseStatus resp of
           s | validStatus s -> responseBody resp $$+- sink
-            | otherwise     -> return $ invalidArgs ["Verification failded"]
+            | otherwise     -> return verificationFailed
 
 checkChallengeSink :: Monad m => B.ByteString -> Sink B.ByteString m Bool
 checkChallengeSink challenge = go (B.length challenge) 0 B.empty
@@ -139,6 +171,9 @@ checkChallengeSink challenge = go (B.length challenge) 0 B.empty
 
 processed :: Handler a
 processed = sendResponseStatus status204 ("Processed" :: Text)
+
+verificationFailed :: Handler a
+verificationFailed = invalidArgs ["Verification failed"]
 
 param :: Text -> Maybe a -> Validation Text a
 param _ (Just a) = Success a

@@ -16,5 +16,10 @@ Sub
 	secret Text Maybe
 	verifyToken Text Maybe
 	verified Bool
+    activated Bool
+SubHist
+    ident SubId
+    event Text
+    date UTCTime
 
  -- By default this file is used in Model.hs (which is imported by Foundation.hs)
