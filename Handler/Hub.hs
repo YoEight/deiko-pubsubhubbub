@@ -3,15 +3,21 @@ module Handler.Hub where
 
 import Import
 
-import Control.Applicative (Applicative(..), (<$>), (<|>), some)
+import Control.Applicative (Applicative(..), (<|>), some)
+import Control.Monad (join)
+import qualified Data.ByteString as B
 import Data.Char (isDigit)
+import Data.Conduit
 import Data.Foldable (foldMap)
 import Data.List.NonEmpty hiding (nonEmpty)
 import Data.Monoid (First(..))
 import qualified Data.Semigroup as S
 import Data.String (fromString)
+import Data.Text.Encoding (encodeUtf8)
 import Data.Traversable (traverse)
-import Text.Parsec.Text
+import Network.HTTP.Conduit
+import Network.HTTP.Types.Status
+import Text.Parsec.Text ()
 import Text.ParserCombinators.Parsec.Char
 import Text.ParserCombinators.Parsec.Combinator hiding (optional)
 import Text.ParserCombinators.Parsec.Prim hiding (label, (<|>))
@@ -47,7 +53,10 @@ decision x             = invalidArgs ["unknown " <> x <> " for hub.mode"]
 subscription :: (Sub -> Handler Text) -> Handler Text
 subscription k = do
   sub <- mkRequest
-  error "todo"
+  runDB $ insert_ sub
+  case subVerify sub of
+    "async" -> processed
+    "sync"  -> verification sub
 
 mkRequest :: Handler Sub
 mkRequest = do
@@ -82,6 +91,55 @@ unsubscription = error "unsubscription not implemented yet"
 publish :: Handler Text
 publish = error "publish not implemented yet"
 
+randomString :: MonadIO m => m Text
+randomString = return "challenge_test"
+
+verification :: Sub -> Handler Text
+verification sub = do
+  challenge   <- randomString
+  (Just mode) <- lookupGetParam "hub.mode"
+  req         <- parseUrl (show $ url mode challenge)
+  join $ withManager $ handleResp req challenge
+
+  where
+    url m c =
+      subCallback sub <> "?" <> foldl1 (\a b -> a <> "&" <> b) (params m c)
+
+    params m c =
+      let lease     = subLeaseSeconds sub 
+          leaseTxt  = fmap (fromString . show) lease in
+      mconcat [["hub.mode=" <> m
+               ,"hub.topic=" <> subTopic sub
+               ,"hub.challenge=" <> c]
+              , [foldMap ("hub.lease_seconds=" <>) leaseTxt]]
+
+    handleResp req challenge manager =
+      http req manager >>= \resp ->
+        let validStatus s = status200 <= s && s < status300 
+            sink = checkChallengeSink (encodeUtf8 challenge) >>= \match ->
+                    if match 
+                      then return processed
+                      else return (invalidArgs ["Verification failded"]) in
+        case responseStatus resp of
+          s | validStatus s -> responseBody resp $$+- sink
+            | otherwise     -> return $ invalidArgs ["Verification failded"]
+
+checkChallengeSink :: Monad m => B.ByteString -> Sink B.ByteString m Bool
+checkChallengeSink challenge = go (B.length challenge) 0 B.empty
+  where
+    go n acc bs = await >>= \opt ->
+      case opt of
+        Nothing -> return False
+        Just i | (acc+B.length i) > n -> return False
+               | (acc+B.length i) < n -> go n (acc+B.length i) (bs <> i)
+               | otherwise ->
+                  if challenge == (bs <> i)
+                    then maybe (return True) (const $ return False) =<< await
+                    else return False
+
+processed :: Handler a
+processed = sendResponseStatus status204 ("Processed" :: Text)
+
 param :: Text -> Maybe a -> Validation Text a
 param _ (Just a) = Success a
 param key _      = Failure (nel $ key <> " is not provided")
@@ -93,11 +151,11 @@ nonEmpty key _    = Failure (nel $ key <> " is not provided")
 number :: Text -> Text -> Validation Text Int
 number key value = 
   case show value of
-    []                  -> notNumber []
+    []                  -> notNumber
     xs | all isDigit xs -> Success (read xs)
-       | otherwise      -> notNumber xs
+       | otherwise      -> notNumber
   where
-    notNumber str = Failure (nel $ key <> " is not a member")
+    notNumber = Failure (nel $ key <> " is not a member [" <> value <> "]")
 
 validateLease :: Maybe Text -> Validation Text (Maybe Int)
 validateLease = traverse (number "hub.lease_seconds")

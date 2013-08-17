@@ -73,6 +73,9 @@ library
                  , fast-logger                   >= 0.3
                  , semigroups                    >= 0.8        && < 0.10
                  , parsec
+                 , http-conduit                  >= 1.6.0      && < 1.10
+                 , mtl                           >= 2.0.1      && < 2.2
+                 , http-types                    >= 0.7.0      && < 0.9
 
 executable         deiko-pubsubhubbub
     if flag(library-only)
