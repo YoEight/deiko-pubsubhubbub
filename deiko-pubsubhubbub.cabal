@@ -21,6 +21,8 @@ library
                      Settings.Development
                      Handler.Home
                      Handler.Hub
+    other-modules: Handler.Hub.Subscription
+                   Handler.Hub.Util
 
     if flag(dev) || flag(library-only)
         cpp-options:   -DDEVELOPMENT
