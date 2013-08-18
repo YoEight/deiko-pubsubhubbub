@@ -17,6 +17,7 @@ import Data.Foldable (foldMap)
 import Data.List.NonEmpty hiding (nonEmpty, insert)
 import Data.Monoid (First(..))
 import Data.String (fromString)
+import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Traversable (traverse)
 import Network.HTTP.Conduit
@@ -75,27 +76,23 @@ mkRequest :: Handler Sub
 mkRequest = do
   callback  <- lookupGetParam "hub.callback"
   topic     <- lookupGetParam "hub.topic"
-  verif     <- lookupGetParams "hub.verify"
   leaseOpt  <- lookupGetParam "hub.lease_seconds"
   secret    <- lookupGetParam "hub.secret"
-  verifyTok <- lookupGetParam "hub.verify_token"
-  action callback topic verif leaseOpt secret verifyTok
+  action callback topic leaseOpt secret
 
   where
-    validate cb topic verif lease secret verifyTok =
+    validate cb topic lease secret =
       Sub <$>
       url "hub.callback" cb <*>
       url "hub.topic" topic <*>
-      validateVerify verif  <*>
       validateLease lease   <*>
       pure secret           <*>
-      pure verifyTok        <*>
       pure False            <*>
       pure True
 
-    action cb topic verify lease secret verifyTok =
+    action cb topic lease secret =
       validation (invalidArgs . toList) return $
-      validate cb topic verify lease secret verifyTok
+      validate cb topic lease secret
 
     url key opt = validateUrl key -<< param key opt
 
@@ -117,7 +114,9 @@ verification sub = do
 
   where
     url m c =
-      subCallback sub <> "?" <> foldl1 (\a b -> a <> "&" <> b) (params m c)
+      let cb  = subCallback sub
+          sep = maybe "?" (const "&") (T.find (== '?') cb) in
+      cb <> sep <> foldl1 (\a b -> a <> "&" <> b) (params m c)
 
     params m c =
       let lease     = subLeaseSeconds sub
@@ -159,16 +158,6 @@ verificationFailed = invalidArgs ["Verification failed"]
 
 validateLease :: Maybe Text -> Validation Text (Maybe Int)
 validateLease = traverse (number "hub.lease_seconds")
-
-validateVerify :: [Text] -> Validation Text Text
-validateVerify = (go -<<) . nonEmpty "hub.verify"
-  where
-    go =
-      let f x | x == "sync"  = First (Just x)
-              | x == "async" = First (Just x)
-              | otherwise    = First Nothing
-          err = Failure $ nel $ "Unsupported hub.verify values" in
-      maybe err Success . getFirst . foldMap f
 
 validateUrl :: Text -> Text -> Validation Text Text
 validateUrl key input =
