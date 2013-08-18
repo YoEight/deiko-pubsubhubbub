@@ -27,7 +27,7 @@ import Text.ParserCombinators.Parsec.Combinator hiding (optional)
 import Text.ParserCombinators.Parsec.Prim hiding (label, (<|>))
 
 type SubFinal a = KeyBackend (PersistEntityBackend Sub) Sub
-                -> Sub 
+                -> Sub
                 -> Handler a
 
 subscribe :: Handler Text
@@ -47,7 +47,7 @@ subscription k = do
   where
     creationRoutine sub =
       let topic     = subTopic sub
-          cb        = subCallback sub 
+          cb        = subCallback sub
           onExist t = const (entityKey t) <$> replace (entityKey t) sub in do
       res   <- selectFirst [SubTopic ==. topic, SubCallback ==. cb] []
       subId <- maybe (insert sub) onExist res
@@ -56,7 +56,7 @@ subscription k = do
       return subId
 
 onSubSuccess :: SubFinal ()
-onSubSuccess subId sub = runDB action 
+onSubSuccess subId sub = runDB action
   where
     action = do
       update subId [SubVerified =. True]
@@ -80,7 +80,7 @@ mkRequest = do
   secret    <- lookupGetParam "hub.secret"
   verifyTok <- lookupGetParam "hub.verify_token"
   action callback topic verif leaseOpt secret verifyTok
-  
+
   where
     validate cb topic verif lease secret verifyTok =
       Sub <$>
@@ -120,7 +120,7 @@ verification sub = do
       subCallback sub <> "?" <> foldl1 (\a b -> a <> "&" <> b) (params m c)
 
     params m c =
-      let lease     = subLeaseSeconds sub 
+      let lease     = subLeaseSeconds sub
           leaseTxt  = fmap (fromString . show) lease in
       mconcat [["hub.mode=" <> m
                ,"hub.topic=" <> subTopic sub
@@ -129,7 +129,7 @@ verification sub = do
 
     handleResp req challenge manager =
       http req manager >>= \resp ->
-        let validStatus s = status200 <= s && s < status300 
+        let validStatus s = status200 <= s && s < status300
             sink =
               let f x | x         = return ()
                       | otherwise = verificationFailed in

@@ -32,7 +32,7 @@ nonEmpty _ (x:xs) = Success (x :| xs)
 nonEmpty key _    = Failure (nel $ key <> " is not provided")
 
 number :: Text -> Text -> Validation Text Int
-number key value = 
+number key value =
   case show value of
     []                  -> notNumber
     xs | all isDigit xs -> Success (read xs)
