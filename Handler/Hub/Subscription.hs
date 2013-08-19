@@ -75,10 +75,10 @@ onUnsubSuccess subId sub = runDB action
 
 mkRequest :: Handler Sub
 mkRequest = do
-  callback <- lookupGetParam "hub.callback"
-  topic    <- lookupGetParam "hub.topic"
-  leaseOpt <- lookupGetParam "hub.lease_seconds"
-  secret   <- lookupGetParam "hub.secret"
+  callback <- lookupPostParam "hub.callback"
+  topic    <- lookupPostParam "hub.topic"
+  leaseOpt <- lookupPostParam "hub.lease_seconds"
+  secret   <- lookupPostParam "hub.secret"
   action callback topic leaseOpt secret
 
   where
@@ -103,7 +103,7 @@ randomString = return "challenge_test"
 verification :: Sub -> Handler ()
 verification sub = do
   challenge   <- randomString
-  (Just mode) <- lookupGetParam "hub.mode"
+  (Just mode) <- lookupPostParam "hub.mode"
   req         <- parseUrl (show $ url mode challenge)
   manager     <- fmap httpManager getYesod
   handleResp req mode challenge manager

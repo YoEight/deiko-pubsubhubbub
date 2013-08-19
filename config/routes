@@ -6,4 +6,4 @@
 
 / HomeR GET POST
 
-/hub HubR GET
+/hub HubR POST

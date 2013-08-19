@@ -5,9 +5,9 @@ import Import
 
 import Handler.Hub.Subscription (subscribe, unsubscribe)
 
-getHubR :: Handler Text
-getHubR = do
-  modeOpt <- lookupGetParam "hub.mode"
+postHubR :: Handler Text
+postHubR = do
+  modeOpt <- lookupPostParam "hub.mode"
   maybe (invalidArgs ["hub.mode has not be provided"]) decision modeOpt
 
 decision :: Text -> Handler Text
