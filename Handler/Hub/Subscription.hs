@@ -9,28 +9,20 @@ import Import
 
 import Handler.Hub.Util
 
-import Control.Applicative (Applicative(..), (<|>), some)
 import Control.Concurrent (forkIO)
 import Control.Monad (when)
 import qualified Data.ByteString as B
 import Data.Conduit
-import Data.Foldable (foldMap)
 import Data.List.NonEmpty hiding (nonEmpty, insert)
 import Data.Maybe (maybeToList)
-import Data.Monoid (First(..))
 import Data.String (fromString)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Traversable (traverse)
 import Network.HTTP.Conduit
 import Network.HTTP.Types.Status
-import Text.Parsec.Text ()
-import Text.ParserCombinators.Parsec.Char
-import Text.ParserCombinators.Parsec.Combinator hiding (optional)
-import Text.ParserCombinators.Parsec.Prim hiding (label, (<|>))
 
 type SubFinal a = KeyBackend (PersistEntityBackend Sub) Sub
-                -> Sub
                 -> Handler a
 
 subscribe :: Handler Text
@@ -44,7 +36,7 @@ subscription k = do
   sub     <- mkRequest
   subId   <- runDB $ creationRoutine sub
   handler <- handlerToIO
-  liftIO $ forkIO $ handler (verification sub >> k subId sub)
+  liftIO $ forkIO $ handler (verification sub >> k subId)
   accepted
   where
     creationRoutine sub =
@@ -58,7 +50,7 @@ subscription k = do
       return subId
 
 onSubSuccess :: SubFinal ()
-onSubSuccess subId sub = runDB action
+onSubSuccess subId = runDB action
   where
     action = do
       update subId [SubVerified =. True]
@@ -66,7 +58,7 @@ onSubSuccess subId sub = runDB action
       insert_ (SubHist subId "verified" date)
 
 onUnsubSuccess :: SubFinal ()
-onUnsubSuccess subId sub = runDB action
+onUnsubSuccess subId = runDB action
   where
     action = do
       update subId [SubActivated =. False]
@@ -95,8 +87,6 @@ mkRequest = do
       validation (invalidArgs . toList) return $
       validate cb topic lease secret
 
-    url key opt = validateUrl key -<< param key opt
-
 randomString :: MonadIO m => m Text
 randomString = return "challenge_test"
 
@@ -104,12 +94,12 @@ verification :: Sub -> Handler ()
 verification sub = do
   challenge   <- randomString
   (Just mode) <- lookupPostParam "hub.mode"
-  req         <- parseUrl (show $ url mode challenge)
+  req         <- parseUrl (show $ urlTxt mode challenge)
   manager     <- fmap httpManager getYesod
   handleResp req mode challenge manager
 
   where
-    url m c =
+    urlTxt m c =
       let f x    = ("hub.lease_seconds", fromString $ show x)
           lease  = maybeToList $ fmap f (subLeaseSeconds sub)
           params = [("hub.mode", m)
@@ -120,7 +110,7 @@ verification sub = do
     handleResp req mode challenge manager =
       http req manager >>= \resp ->
         let validStatus s  = status200 <= s && s < status300
-            checking check = when (not check) (verificationFailed sub mode)
+            checking ok    = when (not ok) (verificationFailed sub mode)
             sink           = checkChallengeSink (encodeUtf8 challenge) in
         case responseStatus resp of
           s | validStatus s -> checking =<< (responseBody resp $$+- sink)
@@ -163,16 +153,3 @@ verificationFailed sub mode =
 
 validateLease :: Maybe Text -> Validation Text (Maybe Int)
 validateLease = traverse (number "hub.lease_seconds")
-
-validateUrl :: Text -> Text -> Validation Text Text
-validateUrl key input =
-  either (Failure . nel . prepend . fromString . show)
-           (Success . const input)
-           (parse parser "" input *> pure ())
-  where
-    parser = do
-      string "http" <?> "http/https protocol"
-      string "s://" <|> string "://"
-      some (alphaNum <|> oneOf "-_?/&.:") <?> "no strange symbol in a url"
-      eof
-    prepend s = key <> ": " <> s

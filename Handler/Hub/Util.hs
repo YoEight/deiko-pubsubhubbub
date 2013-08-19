@@ -1,10 +1,15 @@
 module Handler.Hub.Util where
 
 import Import
-import Control.Applicative (Applicative(..))
+import Control.Applicative (Applicative(..), (<|>), some)
 import Data.Char (isDigit)
 import Data.List.NonEmpty
+import Data.String (fromString)
 import qualified Data.Semigroup as S
+import Text.Parsec.Text ()
+import Text.ParserCombinators.Parsec.Char
+import Text.ParserCombinators.Parsec.Combinator hiding (optional)
+import Text.ParserCombinators.Parsec.Prim hiding (label, (<|>))
 
 infixl 1 >>-
 infixl 1 -<<
@@ -40,6 +45,9 @@ number key value =
   where
     notNumber = Failure (nel $ key <> " is not a member [" <> value <> "]")
 
+url :: Text -> Maybe Text -> Validation Text Text
+url key opt = validateUrl key -<< param key opt
+
 (>>-) :: Validation e a -> (a -> Validation e b) -> Validation e b
 Failure e >>- _ = Failure e
 Success a >>- f = f a
@@ -53,3 +61,16 @@ validation _ k   (Success a) = k a
 
 nel :: a -> NonEmpty a
 nel a = a :| []
+
+validateUrl :: Text -> Text -> Validation Text Text
+validateUrl key input =
+  either (Failure . nel . prepend . fromString . show)
+           (Success . const input)
+           (parse parser "" input *> pure ())
+  where
+    parser = do
+      string "http" <?> "http/https protocol"
+      string "s://" <|> string "://"
+      some (alphaNum <|> oneOf "-_?/&.:") <?> "no strange symbol in a url"
+      eof
+    prepend s = key <> ": " <> s
