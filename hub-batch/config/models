@@ -1,0 +1,23 @@
+Sub
+    callback Text
+    topic Text
+    leaseSeconds Int Maybe
+    secret Text Maybe
+    verified Bool
+    activated Bool
+SubHist
+    ident SubId
+    event Text
+    date UTCTime
+Pub
+    topic Text
+    fetched Bool
+PubContent
+    ident PubId
+    content ByteString
+    hash Int
+    date UTCTime
+PubHist
+    ident PubId
+    event Text
+    date UTCTime
