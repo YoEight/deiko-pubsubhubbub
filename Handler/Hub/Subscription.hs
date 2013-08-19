@@ -10,11 +10,13 @@ import Import
 import Handler.Hub.Util
 
 import Control.Applicative (Applicative(..), (<|>), some)
-import Control.Monad (join)
+import Control.Concurrent (forkIO)
+import Control.Monad (when)
 import qualified Data.ByteString as B
 import Data.Conduit
 import Data.Foldable (foldMap)
 import Data.List.NonEmpty hiding (nonEmpty, insert)
+import Data.Maybe (maybeToList)
 import Data.Monoid (First(..))
 import Data.String (fromString)
 import qualified Data.Text as T
@@ -37,14 +39,13 @@ subscribe = subscription onSubSuccess
 unsubscribe :: Handler Text
 unsubscribe = subscription onUnsubSuccess
 
-subscription :: SubFinal a -> Handler Text
+subscription :: SubFinal () -> Handler Text
 subscription k = do
-  sub   <- mkRequest
-  subId <- runDB $ creationRoutine sub
-  case subVerify sub of
-    "async" -> processed
-    "sync"  -> verification sub >> k subId sub >> processed
-
+  sub     <- mkRequest
+  subId   <- runDB $ creationRoutine sub
+  handler <- handlerToIO
+  liftIO $ forkIO $ handler (verification sub >> k subId sub)
+  accepted
   where
     creationRoutine sub =
       let topic     = subTopic sub
@@ -74,10 +75,10 @@ onUnsubSuccess subId sub = runDB action
 
 mkRequest :: Handler Sub
 mkRequest = do
-  callback  <- lookupGetParam "hub.callback"
-  topic     <- lookupGetParam "hub.topic"
-  leaseOpt  <- lookupGetParam "hub.lease_seconds"
-  secret    <- lookupGetParam "hub.secret"
+  callback <- lookupGetParam "hub.callback"
+  topic    <- lookupGetParam "hub.topic"
+  leaseOpt <- lookupGetParam "hub.lease_seconds"
+  secret   <- lookupGetParam "hub.secret"
   action callback topic leaseOpt secret
 
   where
@@ -96,12 +97,6 @@ mkRequest = do
 
     url key opt = validateUrl key -<< param key opt
 
-unsubscription :: Handler Text
-unsubscription = error "unsubscription not implemented yet"
-
-publish :: Handler Text
-publish = error "publish not implemented yet"
-
 randomString :: MonadIO m => m Text
 randomString = return "challenge_test"
 
@@ -110,32 +105,34 @@ verification sub = do
   challenge   <- randomString
   (Just mode) <- lookupGetParam "hub.mode"
   req         <- parseUrl (show $ url mode challenge)
-  join $ withManager $ handleResp req challenge
+  manager     <- fmap httpManager getYesod
+  handleResp req mode challenge manager
 
   where
     url m c =
-      let cb  = subCallback sub
-          sep = maybe "?" (const "&") (T.find (== '?') cb) in
-      cb <> sep <> foldl1 (\a b -> a <> "&" <> b) (params m c)
+      let f x    = ("hub.lease_seconds", fromString $ show x)
+          lease  = maybeToList $ fmap f (subLeaseSeconds sub)
+          params = [("hub.mode", m)
+                   ,("hub.topic", subTopic sub)
+                   ,("hub.challenge", c)] ++ lease in
+      subCallbackUrl params sub
 
-    params m c =
-      let lease     = subLeaseSeconds sub
-          leaseTxt  = fmap (fromString . show) lease in
-      mconcat [["hub.mode=" <> m
-               ,"hub.topic=" <> subTopic sub
-               ,"hub.challenge=" <> c]
-              , [foldMap ("hub.lease_seconds=" <>) leaseTxt]]
-
-    handleResp req challenge manager =
+    handleResp req mode challenge manager =
       http req manager >>= \resp ->
-        let validStatus s = status200 <= s && s < status300
-            sink =
-              let f x | x         = return ()
-                      | otherwise = verificationFailed in
-              fmap f (checkChallengeSink (encodeUtf8 challenge)) in
+        let validStatus s  = status200 <= s && s < status300
+            checking check = when (not check) (verificationFailed sub mode)
+            sink           = checkChallengeSink (encodeUtf8 challenge) in
         case responseStatus resp of
-          s | validStatus s -> responseBody resp $$+- sink
-            | otherwise     -> return verificationFailed
+          s | validStatus s -> checking =<< (responseBody resp $$+- sink)
+            | otherwise     -> verificationFailed sub mode
+
+subCallbackUrl :: [(Text, Text)] -> Sub -> Text
+subCallbackUrl [] sub     = subCallback sub
+subCallbackUrl params sub =
+  let cb           = subCallback sub
+      sep          = maybe "?" (const "&") (T.find (== '?') cb)
+      toStr (k, v) = k <> v in
+  cb <> sep <> foldl1 (\a b -> a <> "&" <> b) (fmap toStr params)
 
 checkChallengeSink :: Monad m => B.ByteString -> Sink B.ByteString m Bool
 checkChallengeSink challenge = go (B.length challenge) 0 B.empty
@@ -150,11 +147,19 @@ checkChallengeSink challenge = go (B.length challenge) 0 B.empty
                     then maybe (return True) (const $ return False) =<< await
                     else return False
 
-processed :: Handler a
-processed = sendResponseStatus status204 ("Processed" :: Text)
+accepted :: Handler a
+accepted = sendResponseStatus status202 ("Accepted" :: Text)
 
-verificationFailed :: Handler a
-verificationFailed = invalidArgs ["Verification failed"]
+verificationFailed :: Sub -> Text -> Handler ()
+verificationFailed sub mode =
+  let topic  = subTopic sub
+      params = [("hub.mode", mode)
+               ,("hub.topic", topic)
+               ,("hub.reason", "Verification failed")] in
+  do manager <- fmap httpManager getYesod
+     req     <- parseUrl $ show $ subCallbackUrl params sub
+     resp    <- http req manager
+     responseBody resp $$+- return ()
 
 validateLease :: Maybe Text -> Validation Text (Maybe Int)
 validateLease = traverse (number "hub.lease_seconds")

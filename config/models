@@ -9,13 +9,11 @@ Email
     verkey Text Maybe
     UniqueEmail email
 Sub
-	callback Text
-	topic Text
-	verify Text
-	leaseSeconds Int Maybe
-	secret Text Maybe
-	verifyToken Text Maybe
-	verified Bool
+    callback Text
+    topic Text
+    leaseSeconds Int Maybe
+    secret Text Maybe
+    verified Bool
     activated Bool
 SubHist
     ident SubId
