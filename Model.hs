@@ -4,6 +4,7 @@ import Prelude
 import Yesod
 import Data.Time.Clock
 import Data.Text (Text)
+import Data.ByteString (ByteString)
 import Database.Persist.Quasi
 import Data.Typeable (Typeable)
 

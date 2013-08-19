@@ -19,5 +19,17 @@ SubHist
     ident SubId
     event Text
     date UTCTime
+Pub
+    topic Text
+    fetched Bool
+PubContent
+    ident PubId
+    content ByteString
+    hash Int
+    date UTCTime
+PubHist
+    ident PubId
+    event Text
+    date UTCTime
 
  -- By default this file is used in Model.hs (which is imported by Foundation.hs)
