@@ -69,7 +69,7 @@ onUnsubSuccess :: SubFinal ()
 onUnsubSuccess subId sub = runDB action
   where
     action = do
-      update subId [SubActivated =. True]
+      update subId [SubActivated =. False]
       date <- liftIO getCurrentTime
       insert_ (SubHist subId "deleted" date)
 
