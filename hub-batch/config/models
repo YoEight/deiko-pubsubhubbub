@@ -11,7 +11,7 @@ SubHist
     date UTCTime
 Pub
     topic Text
-    fetched Bool
+    stateValue PubState
 PubContent
     ident PubId
     content ByteString
@@ -20,4 +20,9 @@ PubContent
 PubHist
     ident PubId
     event Text
+    date UTCTime
+PubFailure
+    subId SubId
+    pubId PubId
+    count Int
     date UTCTime
